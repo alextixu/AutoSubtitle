@@ -1,0 +1,4 @@
+faster-whisper
+opencc-python-reimplemented
+pywebview
+numpy
