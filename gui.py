@@ -454,6 +454,17 @@ def uitest(out: str, timeout: float = 90.0) -> int:
     return 0 if report['ok'] else 1
 
 
+def _hard_exit(code: int = 0):
+    """直接結束程序。打包後的 macOS 版在 Python 正常收尾時，會卡在辨識引擎留下的
+    背景執行緒上，視窗關了程式卻還在。工作都已完成、檔案也寫好了，所以跳過收尾。"""
+    for f in (sys.stdout, sys.stderr):
+        try:
+            f.flush()
+        except Exception:  # noqa: BLE001
+            pass
+    os._exit(code)
+
+
 def _quiet_streams():
     """打包成視窗程式後沒有主控台，sys.stdout/stderr 會是 None。
     模型下載的進度條寫到 None 會當掉，所以改寫進使用者資料夾的 log。"""
@@ -473,11 +484,11 @@ def _quiet_streams():
 def main(default_view: str = 'transcribe'):
     _quiet_streams()
     if '--uitest' in sys.argv:
-        sys.exit(uitest(sys.argv[sys.argv.index('--uitest') + 1]))
+        _hard_exit(uitest(sys.argv[sys.argv.index('--uitest') + 1]))
     if '--selftest' in sys.argv:
         i = sys.argv.index('--selftest')
         model = sys.argv[i + 3] if len(sys.argv) > i + 3 else 'tiny'
-        sys.exit(selftest(sys.argv[i + 1], sys.argv[i + 2], model))
+        _hard_exit(selftest(sys.argv[i + 1], sys.argv[i + 2], model))
     view = default_view
     for a in sys.argv[1:]:
         if a in ('transcribe', 'editor'):
@@ -504,6 +515,8 @@ def main(default_view: str = 'transcribe'):
 
     win.events.closing += on_closing
     webview.start(debug='--debug' in sys.argv)
+    if FROZEN:
+        _hard_exit(0)
 
 
 if __name__ == '__main__':
