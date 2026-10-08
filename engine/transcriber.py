@@ -79,6 +79,76 @@ def split_segment(words, max_chars: int):
     return lines
 
 
+_compute_cache: dict | None = None
+CUDA_HINT = 'pip install nvidia-cublas-cu12 nvidia-cudnn-cu12'
+
+
+def _gpu_name() -> str:
+    """用 nvidia-smi 讀顯示卡名稱；pythonw 啟動時不能跳出主控台視窗。"""
+    import subprocess
+    try:
+        flags = 0x08000000 if os.name == 'nt' else 0  # CREATE_NO_WINDOW
+        r = subprocess.run(['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
+                           capture_output=True, text=True, timeout=5, creationflags=flags)
+        return r.stdout.strip().splitlines()[0].strip() if r.returncode == 0 and r.stdout.strip() else ''
+    except (OSError, subprocess.SubprocessError, IndexError):
+        return ''
+
+
+def compute_info(refresh: bool = False) -> dict:
+    """這台電腦能用什麼算：{cuda_devices, cuda_libs, gpu_name, gpu_ok, reason}。
+    有顯示卡但缺 cuBLAS/cuDNN 時 gpu_ok=False，避免辨識到一半才失敗。"""
+    global _compute_cache
+    if _compute_cache is not None and not refresh:
+        return _compute_cache
+    info = {'cuda_devices': 0, 'cuda_libs': False, 'gpu_name': '', 'gpu_ok': False, 'reason': ''}
+    try:
+        import ctranslate2
+        info['cuda_devices'] = ctranslate2.get_cuda_device_count()
+    except Exception as e:  # noqa: BLE001
+        info['reason'] = f'ctranslate2 無法使用：{e}'
+    if info['cuda_devices'] > 0:
+        info['gpu_name'] = _gpu_name() or 'NVIDIA GPU'
+        if os.name == 'nt':
+            _add_cuda_dll_dirs()
+            import ctypes
+            missing = []
+            for dll in ('cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll'):
+                try:
+                    ctypes.WinDLL(dll)
+                except OSError:
+                    missing.append(dll)
+            info['cuda_libs'] = not missing
+            if missing:
+                info['reason'] = f'找不到 CUDA 函式庫（{", ".join(missing)}），安裝：{CUDA_HINT}'
+        else:
+            info['cuda_libs'] = True
+        info['gpu_ok'] = info['cuda_libs']
+    elif not info['reason']:
+        info['reason'] = '沒有偵測到 NVIDIA 顯示卡'
+    _compute_cache = info
+    return info
+
+
+def resolve_device(device: str) -> str:
+    """auto → 能用 GPU 就用 GPU，否則 CPU；指定 cuda 但不能用時直接說明原因。"""
+    if device == 'cpu':
+        return 'cpu'
+    info = compute_info()
+    if info['gpu_ok']:
+        return 'cuda'
+    if device == 'cuda':
+        raise RuntimeError(f'無法使用 GPU：{info["reason"]}')
+    return 'cpu'
+
+
+def device_label(device: str, cpu_threads: int = CPU_THREADS) -> str:
+    """給介面顯示的短名稱：GPU · NVIDIA GeForce RTX 3080 Ti／CPU · 4 執行緒"""
+    if device == 'cuda':
+        return f'GPU · {compute_info()["gpu_name"] or "NVIDIA GPU"}'
+    return f'CPU · {cpu_threads} 執行緒'
+
+
 def _is_mem_error(e: BaseException) -> bool:
     """記憶體不足的錯誤在各層有不同名字：MemoryError、mkl_malloc、bad_alloc…"""
     if isinstance(e, MemoryError):
@@ -215,12 +285,16 @@ def transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
                to_taiwan: bool = True, progress=None,
                chunk_sec: float = CHUNK_SEC,
                cpu_threads: int = CPU_THREADS,
-               start_sec: float = 0.0, end_sec: float | None = None) -> dict:
+               start_sec: float = 0.0, end_sec: float | None = None,
+               on_model=None) -> dict:
     """辨識檔案 → {language, cues:[{start,end,text,words:[[字,起,迄],…]}]}
     progress: 可選 callback(比例 0~1)。長檔案自動分段，記憶體用量固定。
     start_sec/end_sec 只辨識其中一段，輸出時間仍是原檔案的時間。
     記憶體不足時自動改用能跑的最大模型（載入階段與推論階段都會降級），
-    實際使用的模型記在回傳的 model_used。"""
+    實際使用的模型記在回傳的 model_used；實際使用的裝置記在 device_used、device_label、
+    compute_type。device='auto' 時能用 GPU 就用 GPU。
+    on_model: 可選 callback(dict)，模型載入後通知實際使用的模型與裝置。"""
+    device = resolve_device(device)
     base_prompt = '、'.join(glossary_words) + '。' if glossary_words else ''
 
     audio = decode_audio(path, start=start_sec, end=end_sec)
@@ -301,8 +375,15 @@ def transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
             last_err = e
             print(f'[!] 記憶體不足：{size} 模型載不進來，改用小一號的模型', flush=True)
             continue
+        dev_info = {'model': size, 'device_used': device,
+                    'device_label': device_label(device, cpu_threads),
+                    'compute_type': getattr(model.model, 'compute_type', '')}
+        if on_model:
+            on_model(dev_info)
         try:
             result = _run(model, size)
+            result.update(dev_info)
+            result['model_used'] = size
             if start_sec:
                 # 把片段內的相對時間平移回原檔案時間
                 for c in result['cues']:

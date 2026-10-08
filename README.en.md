@@ -12,6 +12,7 @@ Speech recognition runs offline. Your videos are never uploaded, and no account 
 - **One window.** A sidebar switches between Transcript and Subtitle Editor. Nothing opens a second window.
 - **Rounded, minimal UI.** Pill buttons, rounded cards, segmented controls, and switches. It follows the system light or dark theme.
 - **Offline speech recognition.** Built on faster-whisper, a CTranslate2 port of Whisper, with automatic detection of 99 languages.
+- **Uses the GPU automatically.** With an NVIDIA card it runs on the GPU, and the sidebar always shows whether the GPU or CPU is in use. A 67-minute meeting took about 2.5 minutes with the medium model on an RTX 3080 Ti.
 - **Handles long videos.** Audio is split at quiet points so memory use stays flat. If memory runs out, the model steps down a size instead of failing.
 - **Taiwan Traditional Chinese.** OpenCC `s2twp` converts Simplified Chinese to Traditional Chinese with Taiwanese vocabulary.
 - **A glossary that learns.** When you correct a subtitle, the app finds what changed and offers to add it to the glossary, which biases the next run.
@@ -58,8 +59,8 @@ The first time you use a model, its weights are downloaded once. The `small` mod
 
 1. Choose a media file. Supported types are mp4, mov, mkv, webm, avi, mp3, wav, m4a, aac, and flac.
 2. For long videos you can transcribe only part of the file. Enter times such as `13:00`, `1:02:03`, or `780`. Leave them empty for the whole file.
-3. Pick a model, language, and device. You can add a glossary file, which is plain text with one term per line.
-4. Press Start. You can cancel at any time. When it finishes, the transcript appears on the same page, with buttons to copy the text or open the output folder.
+3. Pick a model, language, and compute option. You can add a glossary file, which is plain text with one term per line. With Auto, the GPU is used when available, and the page names the card it will use.
+4. Press Start. Next to the progress bar the page shows the device and precision actually in use, such as `GPU · RTX 3080 Ti · int8_float16`. You can cancel at any time. When it finishes, the transcript appears on the same page, with buttons to copy the text or open the output folder.
 
 Each run writes three files:
 
@@ -163,6 +164,15 @@ flowchart TD
 5. **Line breaking.** Word timestamps are used to split speech into subtitle-sized lines. Breaks prefer punctuation. Lines are forced to break past 16 CJK characters, 42 Latin characters, or 6 seconds.
 6. **Taiwan Chinese.** When the language is Chinese, OpenCC's `s2twp` profile converts both characters and vocabulary to Taiwanese usage.
 7. **Hallucination filter.** Whisper sometimes invents text during silence. The app drops lines that are nearly zero length, impossibly fast (more than 12 CJK characters per second), or identical to the previous line.
+
+### Choosing the compute device
+
+- **Detection.** At startup the app asks ctranslate2 how many CUDA devices exist, reads the card name with `nvidia-smi`, and tries to load `cublas64_12.dll`, `cublasLt64_12.dll`, and `cudnn64_9.dll`.
+- **Finding the libraries.** NVIDIA libraries installed with pip live in `site-packages/nvidia/*/bin`, which is not on the Windows DLL search path. The app adds those folders before loading a GPU model.
+- **Auto mode.** The GPU is used only when both the card and the libraries are present. If the card exists but the libraries are missing, it falls back to the CPU and shows the install command, instead of failing partway through.
+- **Precision.** The GPU uses `int8_float16`, meaning int8 weights with float16 math. The CPU uses `int8`.
+- **Display.** After the model loads, the app reports the actual device and precision in the sidebar, the progress line, and the editor toolbar.
+- **Your screen keeps working.** The GPU handles the display and recognition at the same time. Only a demanding game running alongside will slow both down.
 
 ### Memory safeguards
 

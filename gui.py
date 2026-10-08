@@ -82,6 +82,7 @@ class TranscribeJob:
         self.result: dict | None = None
         self.t0 = 0.0
         self.elapsed = 0.0
+        self.device: dict | None = None   # 實際使用的運算裝置（模型載入後才知道）
 
     @property
     def busy(self) -> bool:
@@ -101,7 +102,7 @@ class TranscribeJob:
             elapsed = self.elapsed if self.state not in ('running', 'cancelling') else time.time() - self.t0
             return {'state': self.state, 'progress': self.progress, 'status': self.status_text,
                     'logs': list(self.logs), 'error': self.error, 'elapsed': round(elapsed, 1),
-                    'summary': (self.result or {}).get('summary')}
+                    'summary': (self.result or {}).get('summary'), 'device': self.device}
 
     def start(self, p: dict):
         self.reset()
@@ -140,7 +141,7 @@ class TranscribeJob:
             r = transcriber.transcribe(
                 str(p['src']), model_size=p['model'], device=p['device'], lang=p['lang'],
                 glossary_words=p['words'], to_taiwan=p['to_tw'], progress=prog,
-                start_sec=p['start'], end_sec=p['end'])
+                start_sec=p['start'], end_sec=p['end'], on_model=self._on_model)
             if self.cancel.is_set():
                 raise Cancelled
             p['outdir'].mkdir(parents=True, exist_ok=True)
@@ -160,11 +161,18 @@ class TranscribeJob:
         finally:
             sys.stdout, sys.stderr = old_out, old_err
 
+    def _on_model(self, info: dict):
+        with self.lock:
+            self.device = info
+        self.log(f'運算裝置：{info["device_label"]}（{info["compute_type"]}），模型 {info["model"]}')
+
     def _finish(self, r: dict, files: list[Path], p: dict):
         cues = r['cues']
         used = r.get('model_used', p['model'])
         note = '' if used == p['model'] else f'，記憶體不足改用 {used} 模型'
         elapsed = time.time() - self.t0
+        dev = r.get('device_label', '')
+        # 裝置另外用標籤顯示，這裡不重複，避免狀態列被截斷
         summary = f'完成：{len(cues)} 句，語言 {r["language"]}，耗時 {elapsed:.0f} 秒{note}'
         self.log(summary)
         for f in files:
@@ -179,6 +187,8 @@ class TranscribeJob:
                 'text': '\n'.join(c['text'] for c in cues),
                 'language': r['language'], 'model_used': used,
                 'elapsed': round(elapsed, 1), 'summary': summary,
+                'device_used': r.get('device_used'), 'device_label': dev,
+                'compute_type': r.get('compute_type'),
             }
             self.state, self.status_text = 'done', summary
 
@@ -237,7 +247,17 @@ class Api(EditorApi):
     def get_info(self):
         return {'app': APP_TITLE, 'initial_view': self._initial_view,
                 'outdir': str(self._outdir), 'models': MODELS,
-                'ffmpeg': exporter.has_ffmpeg(), 'platform': sys.platform}
+                'ffmpeg': exporter.has_ffmpeg(), 'platform': sys.platform,
+                'compute': self.get_compute()}
+
+    def get_compute(self, refresh: bool = False):
+        """這台電腦可用的運算：GPU 能不能用、auto 會選哪個、各選項的顯示名稱"""
+        info = dict(transcriber.compute_info(refresh=bool(refresh)))
+        auto = 'cuda' if info['gpu_ok'] else 'cpu'
+        info.update(auto=auto, cpu_label=transcriber.device_label('cpu'),
+                    gpu_label=transcriber.device_label('cuda') if info['cuda_devices'] else '',
+                    auto_label=transcriber.device_label(auto), hint=transcriber.CUDA_HINT)
+        return info
 
     def open_folder(self, path: str = ''):
         try:
@@ -309,7 +329,7 @@ class Api(EditorApi):
         model = str(q.get('model') or 'small')
         if model not in MODELS:
             raise ValueError(f'不認識的模型：{model}')
-        device = str(q.get('device') or 'cpu')
+        device = str(q.get('device') or 'auto')
         if device not in ('cpu', 'cuda', 'auto'):
             raise ValueError(f'不認識的裝置：{device}')
         lang = str(q.get('lang') or '').strip() or None

@@ -71,7 +71,8 @@ def main():
                     help='tiny/base/small/medium/large-v3（預設 small）')
     ap.add_argument('--lang', default=None, help='語言代碼，不給則自動偵測')
     ap.add_argument('--glossary', default=None, help='詞庫檔：一行一個專有名詞')
-    ap.add_argument('--device', default='cpu', choices=['cpu', 'cuda', 'auto'])
+    ap.add_argument('--device', default='auto', choices=['cpu', 'cuda', 'auto'],
+                    help='auto＝有可用的 NVIDIA 顯示卡就用 GPU（預設）')
     ap.add_argument('--no-tw', action='store_true', help='關閉台灣繁體用語轉換')
     ap.add_argument('--outdir', default=None,
                     help='輸出資料夾（預設 output/）')
@@ -116,7 +117,7 @@ def main():
     used = r.get('model_used', args.model)
     note = '' if used == args.model else f'（實際使用 {used} 模型）'
     print(f'[*] 完成：語言={r["language"]}（信心 {r["language_probability"]:.0%}），'
-          f'{len(cues)} 條，耗時 {time.time()-t0:.0f}s{note}', flush=True)
+          f'{len(cues)} 條，耗時 {time.time()-t0:.0f}s{note}，運算 {r.get("device_label", "")}', flush=True)
 
     files = write_outputs(cues, outdir, output_stem(src, start, end))
     print('[+] 輸出完成：')

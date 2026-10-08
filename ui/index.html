@@ -34,6 +34,13 @@
     </nav>
 
     <div class="sidebar-foot">
+      <div class="compute" id="sideCompute" title="">
+        <span class="compute-dot"></span>
+        <div class="compute-text">
+          <span class="compute-cap" id="sideComputeCap">目前運算</span>
+          <b id="sideComputeName">偵測中…</b>
+        </div>
+      </div>
       <button class="nav-item" id="navOutput">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
         <span>輸出資料夾</span>
@@ -99,12 +106,13 @@
                 <option value="ja">日文</option>
                 <option value="ko">韓文</option>
               </select>
-              <label class="lbl" for="txDevice">裝置</label>
+              <label class="lbl" for="txDevice">運算</label>
               <select id="txDevice" class="field">
-                <option value="cpu">CPU</option>
-                <option value="cuda">CUDA 顯卡</option>
                 <option value="auto">自動</option>
+                <option value="cuda">GPU（CUDA）</option>
+                <option value="cpu">CPU</option>
               </select>
+              <span id="txDeviceNote" class="device-note"></span>
             </div>
           </div>
           <div class="row">
@@ -138,7 +146,7 @@
           </div>
           <div class="progress-wrap">
             <div class="progress" id="txProgress"><div id="txFill"></div></div>
-            <div class="status-line"><span id="txStatus">選一個影音檔開始</span><span id="txElapsed" class="muted"></span></div>
+            <div class="status-line"><span id="txStatus">選一個影音檔開始</span><span class="status-right"><span id="txDevUsed" class="dev-chip hidden"></span><span id="txElapsed" class="muted"></span></span></div>
           </div>
         </div>
 
@@ -190,6 +198,7 @@
             </select>
             <button id="btnTranscribe" class="btn primary">開始辨識</button>
             <div id="jobBar" class="job-bar hidden"><div id="jobFill"></div></div>
+            <span id="jobDevice" class="dev-chip hidden"></span>
             <button id="btnScenes" class="btn" title="偵測影片剪輯點，波形區會出現藍點可磁吸">切點偵測</button>
           </div>
           <div class="tb-group search">

@@ -32,7 +32,7 @@ def main():
                     help='輸出格式，逗號分隔：srt,vtt,txt,ass')
     ap.add_argument('--glossary', default=None,
                     help='詞庫檔：一行一個專有名詞，提高辨識正確率')
-    ap.add_argument('--device', default='cpu', choices=['cpu', 'cuda', 'auto'],
+    ap.add_argument('--device', default='auto', choices=['cpu', 'cuda', 'auto'],
                     help='運算裝置（預設 cpu；有 NVIDIA GPU + CUDA 環境可用 cuda）')
     ap.add_argument('--no-tw', action='store_true', help='關閉「轉台灣繁體與用語」')
     ap.add_argument('--burn', action='store_true', help='用 ffmpeg 把字幕燒進影片')

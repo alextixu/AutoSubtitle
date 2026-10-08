@@ -7,7 +7,7 @@
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const VIEWS = ['transcribe', 'editor'];
   let tx = null;                 // 有 tx_* 方法的 api（pywebview 或 mock）
-  const st = { file: null, glossary: null, outdir: '', model: 'small', running: false, text: '', result: null };
+  const st = { file: null, glossary: null, outdir: '', model: 'small', running: false, text: '', result: null, compute: null };
 
   // ---------- 瀏覽器直開時的 mock：只為了看版面 ----------
   const txMock = (() => {
@@ -15,19 +15,21 @@
     const lines = ['大家好，今天要介紹的是本機離線語音辨識。', '影片不會上傳到任何雲端，也不需要登入。',
                    '選好檔案以後按開始轉檔，就會產出三種檔案。', '長影片可以只轉其中一段，省下等待時間。'];
     return {
-      get_info: async () => ({ app: 'AutoSubtitle 字幕工房（mock）', initial_view: 'transcribe', outdir: 'E:\\AutoSubtitle\\output', models: ['tiny', 'base', 'small', 'medium', 'large-v3'], ffmpeg: false }),
+      get_info: async () => ({ app: 'AutoSubtitle 字幕工房（mock）', initial_view: 'transcribe', outdir: 'E:\\AutoSubtitle\\output', models: ['tiny', 'base', 'small', 'medium', 'large-v3'], ffmpeg: false,
+        compute: { cuda_devices: 1, cuda_libs: true, gpu_ok: true, gpu_name: 'NVIDIA GeForce RTX 3080 Ti', reason: '', auto: 'cuda', cpu_label: 'CPU · 4 執行緒', gpu_label: 'GPU · NVIDIA GeForce RTX 3080 Ti', auto_label: 'GPU · NVIDIA GeForce RTX 3080 Ti', hint: 'pip install nvidia-cublas-cu12 nvidia-cudnn-cu12' } }),
       open_folder: async () => (toast('mock 模式無法開資料夾'), { ok: true }),
       copy_text: async () => ({ ok: false }),
       tx_pick_media: async () => 'E:\\影片\\會議錄影 2026-10-07.mp4',
       tx_pick_glossary: async () => 'E:\\影片\\詞庫.txt',
       tx_pick_outdir: async () => 'E:\\影片\\輸出',
       tx_busy: async () => !!job && job.state === 'running',
-      tx_start: async p => { job = { state: 'running', progress: 0, status: '載入模型中…', logs: [`辨識 ${p.src.split(/[\\/]/).pop()}（模型 ${p.model}）`, '第一次用某個模型會先下載模型檔，之後離線可用。'] }; t0 = Date.now(); return { ok: true }; },
+      tx_start: async p => { job = { state: 'running', progress: 0, status: '載入模型中…', device: null, logs: [`辨識 ${p.src.split(/[\\/]/).pop()}（模型 ${p.model}）`, '第一次用某個模型會先下載模型檔，之後離線可用。'] }; t0 = Date.now(); return { ok: true }; },
       tx_cancel: async () => { if (job) { job.state = 'cancelled'; job.status = '已取消'; job.logs.push('已取消。'); } return { ok: true }; },
       tx_poll: async () => {
         if (!job) return { state: 'idle', progress: 0, status: '', logs: [], elapsed: 0 };
         const el = (Date.now() - t0) / 1000;
         if (job.state === 'running') {
+          if (el > 1) job.device = { device_used: 'cuda', device_label: 'GPU · NVIDIA GeForce RTX 3080 Ti', compute_type: 'int8_float16', model: 'small' };
           job.progress = Math.min(1, Math.max(0, (el - 1.2) / 4));
           if (job.progress >= 1) { job.state = 'done'; job.status = `完成：${lines.length} 句，語言 zh，耗時 ${el.toFixed(0)} 秒`; job.logs.push(job.status); }
         }
@@ -53,6 +55,56 @@
     if (v !== 'editor' && typeof video !== 'undefined' && video && !video.paused) video.pause();
     try { localStorage.setItem('as.view', v); } catch (e) { /* file:// 可能不給存 */ }
   }
+
+  // ---------- 運算裝置顯示 ----------
+  const shortDev = label => (label || '').replace(/NVIDIA\s+(GeForce\s+)?/i, '');
+
+  // 依目前選擇算出「會用什麼」：{device:'cuda'|'cpu'|null, label, warn}
+  function plannedDevice() {
+    const c = st.compute, sel = $('txDevice').value;
+    if (!c) return { device: null, label: '偵測中…', warn: '' };
+    if (sel === 'cpu') return { device: 'cpu', label: c.cpu_label, warn: '' };
+    if (c.gpu_ok) return { device: 'cuda', label: c.gpu_label, warn: '' };
+    if (sel === 'cuda') return { device: null, label: '無法使用 GPU', warn: c.reason };
+    return { device: 'cpu', label: c.cpu_label, warn: c.cuda_devices ? c.reason : '' };
+  }
+
+  function setSide(cls, cap, name, tip) {
+    const el = $('sideCompute');
+    el.className = 'compute ' + cls;
+    $('sideComputeCap').textContent = cap;
+    $('sideComputeName').textContent = name;
+    el.title = tip || name;
+  }
+
+  function renderDevice() {
+    const p = plannedDevice(), note = $('txDeviceNote');
+    if (!st.compute) { note.textContent = ''; return; }
+    if (p.device === 'cuda') {
+      note.textContent = `將使用 ${shortDev(p.label)}`; note.className = 'device-note ok';
+    } else if (p.device === 'cpu') {
+      note.textContent = p.warn ? '將使用 CPU（GPU 缺少 CUDA 函式庫）' : `將使用 ${p.label}`;
+      note.className = 'device-note' + (p.warn ? ' warn' : '');
+    } else {
+      note.textContent = '無法使用 GPU，請改選 CPU 或自動'; note.className = 'device-note warn';
+    }
+    note.title = p.warn || '';
+    if (!st.running) {
+      const cls = p.device === 'cuda' ? 'gpu' : p.device === 'cpu' ? (p.warn ? 'warn' : 'cpu') : 'warn';
+      setSide(cls, '目前運算', shortDev(p.label), p.warn || p.label);
+    }
+  }
+
+  // 辨識中：顯示實際使用的裝置（模型載入後才知道）
+  function showUsedDevice(dev) {
+    const chip = $('txDevUsed');
+    if (!dev) { chip.classList.add('hidden'); return; }
+    chip.textContent = `${shortDev(dev.device_label)} · ${dev.compute_type}`;
+    chip.title = `${dev.device_label}，${dev.compute_type}，模型 ${dev.model}`;
+    chip.className = 'dev-chip' + (dev.device_used === 'cuda' ? ' gpu' : '');
+    if (st.running) setSide((dev.device_used === 'cuda' ? 'gpu' : 'cpu') + ' busy', '辨識中使用', shortDev(dev.device_label), chip.title);
+  }
+  window.__asCompute = { shortDev, setSide, renderDevice, isRunning: () => st.running };
 
   // ---------- 逐字稿轉檔 ----------
   const basename = p => (p || '').split(/[\\/]/).pop();
@@ -99,6 +151,7 @@
   async function start() {
     if (st.running) return;
     if (!st.file) { toast('請先選一個影音檔'); $('txPick').focus(); return; }
+    if (plannedDevice().device === null) { toast('這台電腦目前無法使用 GPU：' + (st.compute ? st.compute.reason : '')); return; }
     const params = {
       src: st.file, start: $('txStart').value, end: $('txEnd').value, model: st.model,
       lang: $('txLang').value, device: $('txDevice').value, to_tw: $('txTw').checked,
@@ -115,6 +168,8 @@
     $('txFill').style.width = '0%';
     $('txProgress').classList.add('indeterminate');
     setRunning(true);
+    showUsedDevice(null);
+    setSide(plannedDevice().device === 'cuda' ? 'gpu busy' : 'cpu busy', '載入模型中', shortDev(plannedDevice().label));
     setStatus('載入模型中…');
     poll();
   }
@@ -128,6 +183,7 @@
     const text = (j.logs || []).join('\n');
     if (logEl.textContent !== text) { logEl.textContent = text; if (atBottom) logEl.scrollTop = logEl.scrollHeight; }
     $('txElapsed').textContent = j.state === 'idle' ? '' : fmtElapsed(j.elapsed);
+    if (j.device) showUsedDevice(j.device);
 
     if (j.state === 'running' || j.state === 'cancelling') {
       if (j.progress > 0) {
@@ -140,6 +196,7 @@
     }
     $('txProgress').classList.remove('indeterminate');
     setRunning(false);
+    renderDevice();
     if (j.state === 'done') {
       $('txFill').style.width = '100%';
       const res = await tx.tx_result();
@@ -231,6 +288,9 @@
     let info = {};
     try { info = (await tx.get_info()) || {}; } catch (e) { info = {}; }
     bindTranscribe(info);
+    st.compute = info.compute || null;
+    $('txDevice').addEventListener('change', renderDevice);
+    renderDevice();
 
     document.querySelectorAll('.nav-item[data-view]').forEach(b => { b.onclick = () => showView(b.dataset.view); });
     $('navOutput').onclick = () => tx.open_folder(st.outdir || '');

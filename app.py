@@ -161,14 +161,16 @@ class Api:
         data = self.store.load(name)
         if not data or not Path(data['media']).exists():
             return {'error': '找不到媒體檔'}
-        self._job = {'state': 'running', 'progress': 0.0, 'error': None, 'project': name}
+        self._job = {'state': 'running', 'progress': 0.0, 'error': None, 'project': name,
+                     'device': None}
 
         def run():
             try:
                 r = transcriber.transcribe(
-                    data['media'], model_size=model_size,
+                    data['media'], model_size=model_size, device='auto',
                     glossary_words=self.glossary.words,
-                    progress=lambda p: self._job.update(progress=p))
+                    progress=lambda p: self._job.update(progress=p),
+                    on_model=lambda info: self._job.update(device=info))
                 data['cues'] = r['cues']
                 data['language'] = r['language']
                 self.store.save(name, data)
