@@ -14,6 +14,7 @@ import http.server
 import json
 import secrets
 import socket
+import socketserver
 import sys
 import threading
 from pathlib import Path
@@ -25,6 +26,19 @@ from engine import exporter, media, transcriber          # noqa: E402
 from engine.paths import DATA_DIR                         # noqa: E402
 from engine.glossary import Glossary                      # noqa: E402
 from engine.projects import ProjectStore                  # noqa: E402
+
+
+# ---------- 本機伺服器：不查主機全名 ----------
+# http.server 啟動時會呼叫 socket.getfqdn() 查主機全名。macOS 上這個查詢會走 mDNS，
+# 系統因此跳出「允許尋找區域網路上的裝置？」的權限提示，但這個程式只用 127.0.0.1。
+# pywebview 內建的伺服器也繼承 HTTPServer，所以直接改掉 HTTPServer.server_bind。
+def _bind_without_fqdn(self):
+    socketserver.TCPServer.server_bind(self)
+    self.server_name = 'localhost'
+    self.server_port = self.server_address[1]
+
+
+http.server.HTTPServer.server_bind = _bind_without_fqdn
 
 
 # ---------- 本機媒體伺服器（只服務註冊過的檔案）----------

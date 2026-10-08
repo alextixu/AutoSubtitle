@@ -118,11 +118,13 @@
   function setGlossary(p) {
     st.glossary = p || null;
     const el = $('txGlossary');
-    el.textContent = p || '選填：純文字檔，一行一個專有名詞，辨識時優先採用';
+    el.textContent = p ? ltr(p) : '選填：純文字檔，一行一個專有名詞，辨識時優先採用';
+    el.title = p || '';
     el.classList.toggle('muted', !p);
     $('txClearGlossary').classList.toggle('hidden', !p);
   }
-  function setOutdir(p) { st.outdir = p || ''; $('txOutdir').textContent = p || ''; }
+  const ltr = p => (p ? `\u200E${p}\u200E` : '');   // rtl 截斷時保持路徑原本的順序
+  function setOutdir(p) { st.outdir = p || ''; $('txOutdir').textContent = ltr(p); $('txOutdir').title = p || ''; }
   function setStatus(text, kind) {
     $('txStatus').textContent = text;
     const line = $('txStatus').parentElement;
