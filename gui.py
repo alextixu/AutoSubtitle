@@ -370,12 +370,33 @@ def _fallback_error(msg: str):
 def selftest(media: str, out: str, model: str = 'tiny') -> int:
     """不開視窗跑一次完整辨識，結果寫成 JSON。給打包後的 CI 驗證用：
     確認 ctranslate2、PyAV、VAD 模型、OpenCC 字典都有包進去。"""
+    import faulthandler
     import json
     import traceback
     report = {'ok': False, 'frozen': FROZEN, 'platform': sys.platform}
+    # 診斷：每個階段寫一行到 <out>.log；卡住超過 AS_SELFTEST_TIMEOUT 秒就印出所有執行緒的堆疊並結束
+    log = open(out + '.log', 'w', encoding='utf-8', buffering=1)  # noqa: SIM115
+    stage = lambda msg: log.write(f'{time.strftime("%H:%M:%S")} {msg}\n')  # noqa: E731
+    faulthandler.dump_traceback_later(float(os.environ.get('AS_SELFTEST_TIMEOUT', '600')),
+                                      exit=True, file=log)
     try:
+        stage('compute_info')
         report['compute'] = transcriber.compute_info()
-        r = transcriber.transcribe(media, model_size=model, device='auto', lang='zh')
+        stage(f'compute {report["compute"]}')
+        last = [-1]
+
+        def prog(x):
+            if int(x * 10) != last[0]:
+                last[0] = int(x * 10)
+                stage(f'progress {x:.0%}')
+
+        def on_model(info):
+            stage(f'model loaded {info}')
+
+        stage(f'transcribe start model={model}')
+        r = transcriber.transcribe(media, model_size=model, device='auto', lang='zh',
+                                   progress=prog, on_model=on_model)
+        stage('transcribe done')
         report.update(ok=bool(r['cues']), cues=len(r['cues']), language=r['language'],
                       device=r.get('device_label'), compute_type=r.get('compute_type'),
                       first=r['cues'][0]['text'] if r['cues'] else '')
@@ -385,6 +406,9 @@ def selftest(media: str, out: str, model: str = 'tiny') -> int:
         report['ok'] = report['ok'] and report['ui_exists'] and report['opencc'] == '軟體'
     except Exception:  # noqa: BLE001
         report['error'] = traceback.format_exc()
+    faulthandler.cancel_dump_traceback_later()
+    stage(f'finished ok={report["ok"]}')
+    log.close()
     Path(out).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding='utf-8')
     return 0 if report['ok'] else 1
 

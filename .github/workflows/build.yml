@@ -52,12 +52,14 @@ jobs:
           AS_GPU: ${{ matrix.gpu }}
         run: pyinstaller packaging/autosubtitle.spec --noconfirm
       - name: Self-test (transcription)
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $p = Start-Process dist\AutoSubtitle\AutoSubtitle.exe -ArgumentList '--selftest', "$PWD\test_audio.wav", "$PWD\selftest.json" -PassThru -Wait
           Get-Content selftest.json -Encoding utf8
           if ($p.ExitCode -ne 0) { throw "selftest failed ($($p.ExitCode))" }
       - name: Self-test (window)
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $p = Start-Process dist\AutoSubtitle\AutoSubtitle.exe -ArgumentList '--uitest', "$PWD\uitest.json" -PassThru -Wait
@@ -115,12 +117,26 @@ jobs:
         env:
           APP_VERSION: ${{ steps.v.outputs.version }}
         run: pyinstaller packaging/autosubtitle.spec --noconfirm
+      - name: Self-test from source (reference)
+        timeout-minutes: 10
+        env:
+          AS_SELFTEST_TIMEOUT: '420'
+        run: |
+          python gui.py --selftest "$PWD/test_audio.wav" "$PWD/source-selftest.json" || code=$?
+          cat source-selftest.json.log || true
+          cat source-selftest.json || true
+          exit ${code:-0}
       - name: Self-test (transcription)
+        timeout-minutes: 10
+        env:
+          AS_SELFTEST_TIMEOUT: '420'
         run: |
           dist/AutoSubtitle.app/Contents/MacOS/AutoSubtitle --selftest "$PWD/test_audio.wav" "$PWD/selftest.json" || code=$?
-          cat selftest.json
+          cat selftest.json.log || true
+          cat selftest.json || true
           exit ${code:-0}
       - name: Self-test (window)
+        timeout-minutes: 5
         env:
           AS_UITEST_SHOT: ${{ github.workspace }}/macos-window.png
         run: |
@@ -144,7 +160,8 @@ jobs:
         with:
           name: selftest-${{ matrix.suffix }}
           path: |
-            *test.json
+            *selftest.json*
+            uitest.json
             macos-window.png
 
   release:
