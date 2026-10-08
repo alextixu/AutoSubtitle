@@ -22,6 +22,7 @@ APP_DIR = Path(__file__).parent
 sys.path.insert(0, str(APP_DIR))
 
 from engine import exporter, media, transcriber          # noqa: E402
+from engine.paths import DATA_DIR                         # noqa: E402
 from engine.glossary import Glossary                      # noqa: E402
 from engine.projects import ProjectStore                  # noqa: E402
 
@@ -102,9 +103,11 @@ class MediaServer:
 
 class Api:
     def __init__(self):
-        self.store = ProjectStore(APP_DIR / 'projects')
-        self.glossary = Glossary(APP_DIR / 'glossary.json')
-        self.styles_path = APP_DIR / 'styles.json'
+        # 原始碼執行時放在專案資料夾；打包後放在使用者資料夾（見 engine/paths.py）
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        self.store = ProjectStore(DATA_DIR / 'projects')
+        self.glossary = Glossary(DATA_DIR / 'glossary.json')
+        self.styles_path = DATA_DIR / 'styles.json'
         self.server = MediaServer()
         self._job: dict = {'state': 'idle', 'progress': 0.0, 'error': None, 'project': None}
         self._window = None  # gui.main() 塞入；加底線是為了不讓 pywebview 把視窗物件當 API 掃描

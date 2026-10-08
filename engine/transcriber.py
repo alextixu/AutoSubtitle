@@ -36,8 +36,13 @@ def _add_cuda_dll_dirs():
     _add_cuda_dll_dirs.done = True
     import site
     import sys
-    roots = [Path(p) / 'nvidia' for p in [*site.getsitepackages(), site.getusersitepackages(),
-                                          *sys.path] if p]
+    bundle = getattr(sys, '_MEIPASS', None)            # 打包版：GPU 版把 DLL 放在這裡
+    roots = ([Path(bundle) / 'nvidia'] if bundle else [])
+    try:
+        roots += [Path(p) / 'nvidia' for p in [*site.getsitepackages(),
+                                               site.getusersitepackages(), *sys.path] if p]
+    except AttributeError:                               # 打包後的 site 模組可能不完整
+        roots += [Path(p) / 'nvidia' for p in sys.path if p]
     seen = set()
     for root in roots:
         for d in root.glob('*/bin') if root.is_dir() else []:
@@ -80,7 +85,10 @@ def split_segment(words, max_chars: int):
 
 
 _compute_cache: dict | None = None
-CUDA_HINT = 'pip install nvidia-cublas-cu12 nvidia-cudnn-cu12'
+import sys as _sys
+CUDA_HINT = ('下載 GPU 版，或安裝 NVIDIA CUDA 12 與 cuDNN 9 並加入 PATH'
+             if getattr(_sys, 'frozen', False)
+             else 'pip install nvidia-cublas-cu12 nvidia-cudnn-cu12')
 
 
 def _gpu_name() -> str:
@@ -120,7 +128,7 @@ def compute_info(refresh: bool = False) -> dict:
                     missing.append(dll)
             info['cuda_libs'] = not missing
             if missing:
-                info['reason'] = f'找不到 CUDA 函式庫（{", ".join(missing)}），安裝：{CUDA_HINT}'
+                info['reason'] = f'找不到 CUDA 函式庫（{", ".join(missing)}）。{CUDA_HINT}'
         else:
             info['cuda_libs'] = True
         info['gpu_ok'] = info['cuda_libs']

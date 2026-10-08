@@ -24,11 +24,12 @@ sys.path.insert(0, str(APP_DIR))
 
 from app import Api as EditorApi                                            # noqa: E402
 from engine import exporter, transcriber                                   # noqa: E402
+from engine.paths import DATA_DIR, FROZEN, OUTPUT_DIR, ui_file             # noqa: E402
 from transcribe import fmt_clock, output_stem, parse_time, write_outputs   # noqa: E402
 
 APP_NAME = 'AutoSubtitle'
 APP_TITLE = 'AutoSubtitle 字幕工房'
-DEFAULT_OUTDIR = APP_DIR / 'output'
+DEFAULT_OUTDIR = OUTPUT_DIR
 MEDIA_FILTER = '影音檔 (*.mp4;*.mov;*.mkv;*.webm;*.avi;*.mp3;*.wav;*.m4a;*.aac;*.flac)'
 ALL_FILTER = '所有檔案 (*.*)'
 MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3']
@@ -366,7 +367,93 @@ def _fallback_error(msg: str):
         print(msg, file=sys.stderr)
 
 
+def selftest(media: str, out: str, model: str = 'tiny') -> int:
+    """不開視窗跑一次完整辨識，結果寫成 JSON。給打包後的 CI 驗證用：
+    確認 ctranslate2、PyAV、VAD 模型、OpenCC 字典都有包進去。"""
+    import json
+    import traceback
+    report = {'ok': False, 'frozen': FROZEN, 'platform': sys.platform}
+    try:
+        report['compute'] = transcriber.compute_info()
+        r = transcriber.transcribe(media, model_size=model, device='auto', lang='zh')
+        report.update(ok=bool(r['cues']), cues=len(r['cues']), language=r['language'],
+                      device=r.get('device_label'), compute_type=r.get('compute_type'),
+                      first=r['cues'][0]['text'] if r['cues'] else '')
+        from opencc import OpenCC
+        report['opencc'] = OpenCC('s2twp').convert('软件')
+        report['ui_exists'] = ui_file().exists()
+        report['ok'] = report['ok'] and report['ui_exists'] and report['opencc'] == '軟體'
+    except Exception:  # noqa: BLE001
+        report['error'] = traceback.format_exc()
+    Path(out).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding='utf-8')
+    return 0 if report['ok'] else 1
+
+
+def uitest(out: str, timeout: float = 90.0) -> int:
+    """開真正的視窗，確認介面載入、前後端 API 接上，然後自動關閉。給打包後的 CI 驗證用。
+    環境變數 AS_UITEST_SHOT 給一個 .png 路徑時，macOS 會順便截一張螢幕。"""
+    import json
+    import webview
+    report = {'ok': False, 'frozen': FROZEN, 'platform': sys.platform}
+    api = Api(initial_view='transcribe')
+    win = webview.create_window(APP_TITLE, str(ui_file()), js_api=api, width=1180, height=800,
+                                background_color='#f5f5f7')
+    api._window = win
+    probe = ("JSON.stringify({api: !!(window.pywebview && window.pywebview.api && window.pywebview.api.tx_start),"
+             " outdir: (document.getElementById('txOutdir') || {}).textContent || '',"
+             " compute: (document.getElementById('sideComputeName') || {}).textContent || '',"
+             " title: document.title})")
+
+    def run():
+        t0 = time.time()
+        try:
+            while time.time() - t0 < timeout:
+                try:
+                    raw = win.evaluate_js(probe)
+                    d = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                    report['last'] = d
+                    if d.get('api') and d.get('outdir') and d.get('compute') not in ('', '偵測中…'):
+                        report.update(d, ok=True, seconds=round(time.time() - t0, 1))
+                        break
+                except Exception as e:  # noqa: BLE001
+                    report['last_error'] = repr(e)
+                time.sleep(0.5)
+            shot = os.environ.get('AS_UITEST_SHOT')
+            if shot and sys.platform == 'darwin':
+                time.sleep(1.5)
+                subprocess.run(['screencapture', '-x', shot], check=False)
+        finally:
+            Path(out).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding='utf-8')
+            win.destroy()
+
+    webview.start(run)
+    return 0 if report['ok'] else 1
+
+
+def _quiet_streams():
+    """打包成視窗程式後沒有主控台，sys.stdout/stderr 會是 None。
+    模型下載的進度條寫到 None 會當掉，所以改寫進使用者資料夾的 log。"""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        log = open(DATA_DIR / 'autosubtitle.log', 'a', encoding='utf-8', buffering=1)  # noqa: SIM115
+    except OSError:
+        log = open(os.devnull, 'w', encoding='utf-8')  # noqa: SIM115
+    if sys.stdout is None:
+        sys.stdout = log
+    if sys.stderr is None:
+        sys.stderr = log
+
+
 def main(default_view: str = 'transcribe'):
+    _quiet_streams()
+    if '--uitest' in sys.argv:
+        sys.exit(uitest(sys.argv[sys.argv.index('--uitest') + 1]))
+    if '--selftest' in sys.argv:
+        i = sys.argv.index('--selftest')
+        model = sys.argv[i + 3] if len(sys.argv) > i + 3 else 'tiny'
+        sys.exit(selftest(sys.argv[i + 1], sys.argv[i + 2], model))
     view = default_view
     for a in sys.argv[1:]:
         if a in ('transcribe', 'editor'):
@@ -378,7 +465,7 @@ def main(default_view: str = 'transcribe'):
         return
     api = Api(initial_view=view)
     win = webview.create_window(
-        APP_TITLE, str(APP_DIR / 'ui' / 'index.html'), js_api=api,
+        APP_TITLE, str(ui_file()), js_api=api,
         width=1280, height=840, min_size=(980, 660), text_select=True,
         background_color='#f5f5f7')
     api._window = win

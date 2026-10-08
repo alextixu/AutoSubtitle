@@ -1,0 +1,169 @@
+# 打包 Windows 與 macOS 版，跑自我測試，推 v* 標籤時自動發佈到 GitHub Releases。
+# Build Windows and macOS apps, self-test them, and publish a GitHub Release for v* tags.
+name: Build apps
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  windows:
+    name: Windows (${{ matrix.flavor }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: standard
+            gpu: '0'
+            suffix: Windows
+          - flavor: nvidia-gpu
+            gpu: '1'
+            suffix: Windows-NVIDIA-GPU
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+          if [ "${{ matrix.gpu }}" = "1" ]; then pip install nvidia-cublas-cu12 nvidia-cudnn-cu12; fi
+      - name: Version
+        id: v
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-dev.${GITHUB_SHA::7}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Build
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.v.outputs.version }}
+          AS_GPU: ${{ matrix.gpu }}
+        run: pyinstaller packaging/autosubtitle.spec --noconfirm
+      - name: Self-test (transcription)
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\AutoSubtitle\AutoSubtitle.exe -ArgumentList '--selftest', "$PWD\test_audio.wav", "$PWD\selftest.json" -PassThru -Wait
+          Get-Content selftest.json -Encoding utf8
+          if ($p.ExitCode -ne 0) { throw "selftest failed ($($p.ExitCode))" }
+      - name: Self-test (window)
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\AutoSubtitle\AutoSubtitle.exe -ArgumentList '--uitest', "$PWD\uitest.json" -PassThru -Wait
+          Get-Content uitest.json -Encoding utf8
+          if ($p.ExitCode -ne 0) { throw "uitest failed ($($p.ExitCode))" }
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "AutoSubtitle-${{ steps.v.outputs.version }}-${{ matrix.suffix }}.zip"
+          Push-Location dist
+          7z a -tzip -mx=7 "..\$name" AutoSubtitle | Out-Null
+          Pop-Location
+          "{0:N0} MB  {1}" -f ((Get-Item $name).Length/1MB), $name
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.suffix }}
+          path: AutoSubtitle-*.zip
+          compression-level: 0
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-${{ matrix.suffix }}
+          path: '*test.json'
+
+  macos:
+    name: macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: apple-silicon
+            runner: macos-latest
+            suffix: macOS-Apple-Silicon
+          - arch: intel
+            runner: macos-15-intel
+            suffix: macOS-Intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+      - name: Version
+        id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-dev.${GITHUB_SHA::7}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Build
+        env:
+          APP_VERSION: ${{ steps.v.outputs.version }}
+        run: pyinstaller packaging/autosubtitle.spec --noconfirm
+      - name: Self-test (transcription)
+        run: |
+          dist/AutoSubtitle.app/Contents/MacOS/AutoSubtitle --selftest "$PWD/test_audio.wav" "$PWD/selftest.json" || code=$?
+          cat selftest.json
+          exit ${code:-0}
+      - name: Self-test (window)
+        env:
+          AS_UITEST_SHOT: ${{ github.workspace }}/macos-window.png
+        run: |
+          dist/AutoSubtitle.app/Contents/MacOS/AutoSubtitle --uitest "$PWD/uitest.json" || code=$?
+          cat uitest.json
+          exit ${code:-0}
+      - name: Package (dmg)
+        run: |
+          name="AutoSubtitle-${{ steps.v.outputs.version }}-${{ matrix.suffix }}.dmg"
+          mkdir -p dmg && cp -R dist/AutoSubtitle.app dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname "AutoSubtitle" -srcfolder dmg -ov -format UDZO "$name"
+          ls -lh "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.suffix }}
+          path: AutoSubtitle-*.dmg
+          compression-level: 0
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-${{ matrix.suffix }}
+          path: |
+            *test.json
+            macos-window.png
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: List files
+        run: ls -lh artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: AutoSubtitle ${{ github.ref_name }}
+          body_path: packaging/RELEASE_NOTES.md
+          files: |
+            artifacts/*.zip
+            artifacts/*.dmg

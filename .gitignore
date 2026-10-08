@@ -25,3 +25,9 @@ desktop.ini
 
 # 與本專案無關的落地頁草稿 / Unrelated landing-page draft
 web/
+
+# 打包產物 / Build output
+build/
+dist/
+*.dmg
+AutoSubtitle-*.zip
