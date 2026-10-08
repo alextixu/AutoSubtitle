@@ -31,7 +31,30 @@
 
 以上截圖都來自實際執行的程式，轉檔結果是用 `base` 模型對內附測試影片真正辨識出來的。
 
-## 安裝與啟動
+## 下載
+
+不用安裝 Python，到 **[Releases 頁面](https://github.com/alextixu/AutoSubtitle/releases/latest)** 下載對應的檔案就能用：
+
+| 系統 | 檔案 |
+|---|---|
+| Windows 10/11 | `AutoSubtitle-版本-Windows.zip` |
+| Windows＋NVIDIA 顯示卡 | `AutoSubtitle-版本-Windows-NVIDIA-GPU.zip`，內含 CUDA 函式庫，檔案較大，辨識快很多 |
+| Mac（M1、M2、M3、M4…） | `AutoSubtitle-版本-macOS-Apple-Silicon.dmg` |
+| Mac（Intel） | `AutoSubtitle-版本-macOS-Intel.dmg` |
+
+- **Windows**：解壓縮後打開 `AutoSubtitle.exe`。出現「Windows 已保護您的電腦」時，按「其他資訊」再按「仍要執行」。
+- **macOS**：打開 dmg，把 AutoSubtitle 拖進「應用程式」。第一次開啟若提示無法驗證開發者，到「系統設定 → 隱私權與安全性」按「強制打開」。
+- 程式沒有購買程式碼簽章，所以兩個系統都會跳一次提醒，之後就不會了。
+- 第一次用某個模型會下載模型檔，需要網路，之後可離線使用。
+
+下載版的資料位置：
+
+| 內容 | Windows | macOS |
+|---|---|---|
+| 逐字稿輸出 | `文件\AutoSubtitle` | `~/Documents/AutoSubtitle` |
+| 專案、詞庫、樣式、紀錄檔 | `%APPDATA%\AutoSubtitle` | `~/Library/Application Support/AutoSubtitle` |
+
+## 從原始碼執行
 
 需求：Python 3.10 以上。Windows 需要 WebView2 執行階段（Windows 10/11 通常已內建），macOS 與 Linux 也可執行。
 
@@ -212,16 +235,34 @@ engine/
   exporter.py        SRT／VTT／TXT／ASS 匯出、ffmpeg 燒錄
   glossary.py        詞庫與自動學習
   projects.py        本機專案儲存（projects/<名稱>/project.json）
+  paths.py           程式資源與使用者資料的位置（原始碼執行 vs 打包版）
 ui/
   index.html         單一視窗外殼
   shell.js           側欄切換、逐字稿轉檔
   app.js             字幕編輯器
   style.css          設計 token（淺色／深色）
 docs/images/         README 截圖
+packaging/           打包設定（PyInstaller spec）、圖示、發佈說明
+.github/workflows/   自動打包 Windows／macOS 並發佈
 make_test_video.py   產生測試影片（每 4 秒換畫面，用來驗證切點偵測）
 test_video.mp4       測試影片
 test_audio.wav       測試音訊
 ```
+
+## 自己打包
+
+```bash
+pip install -r requirements.txt pyinstaller
+pyinstaller packaging/autosubtitle.spec --noconfirm
+```
+
+- Windows 會產生 `dist/AutoSubtitle/AutoSubtitle.exe`，macOS 會產生 `dist/AutoSubtitle.app`。macOS 版必須在 Mac 上打包。
+- Windows GPU 版：先 `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`，再設定 `AS_GPU=1` 打包。
+- 打包後可以用兩個隱藏參數自我測試，CI 每次打包都會跑：
+  - `AutoSubtitle --selftest 音檔 結果.json [模型]`：不開視窗跑一次完整辨識。
+  - `AutoSubtitle --uitest 結果.json`：開真正的視窗，確認介面與 API 接上後自動關閉。
+- 推 `v*` 標籤（例如 `git tag v1.0.0 && git push --tags`）時，GitHub Actions 會打包四個版本、跑自我測試，再發佈到 Releases。
+- 圖示由 `python packaging/make_icon.py` 產生。
 
 ## 開發
 

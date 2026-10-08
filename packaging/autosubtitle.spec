@@ -59,7 +59,7 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
-icon = os.path.join(SPECPATH, 'icon.png' if IS_MAC else 'icon.ico')
+icon = os.path.join(SPECPATH, 'icon.icns' if IS_MAC else 'icon.ico')
 exe = EXE(
     pyz,
     a.scripts,

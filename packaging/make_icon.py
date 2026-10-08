@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """產生 App 圖示（跟介面左上角的標誌一樣）：藍紫漸層圓角方塊＋三條字幕線。
-輸出 packaging/icon.png（1024px，macOS 打包時自動轉 .icns）與 icon.ico（Windows）。
+輸出 packaging/icon.png（1024px）、icon.ico（Windows）、icon.icns（macOS）。
 用法：python packaging/make_icon.py"""
 from pathlib import Path
 
@@ -44,4 +44,5 @@ if __name__ == '__main__':
     img = make()
     img.save(HERE / 'icon.png')
     img.save(HERE / 'icon.ico', sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-    print('saved', HERE / 'icon.png', HERE / 'icon.ico')
+    img.save(HERE / 'icon.icns')   # macOS；先做好，打包機不必裝 Pillow
+    print('saved', HERE / 'icon.png', HERE / 'icon.ico', HERE / 'icon.icns')
