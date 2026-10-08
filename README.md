@@ -229,7 +229,7 @@ test_audio.wav       測試音訊
 - Python 3.10 以上
 - Windows 10/11（WebView2）、macOS 或 Linux
 - 燒錄成品影片才需要 ffmpeg，Windows 可用 `winget install Gyan.FFmpeg` 安裝
-- 使用 CUDA 需要 NVIDIA 顯示卡與對應的 cuBLAS／cuDNN
+- 使用 CUDA 需要 NVIDIA 顯示卡，並安裝 cuBLAS 與 cuDNN（約 1.3 GB）：`pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`。程式會自動找到這些函式庫，顯示卡可以一邊辨識一邊正常輸出畫面
 
 ## 授權
 

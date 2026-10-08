@@ -229,7 +229,7 @@ test_audio.wav       Test audio
 - Python 3.10 or newer
 - Windows 10/11 (WebView2), macOS, or Linux
 - ffmpeg, only for burning subtitles into video. On Windows: `winget install Gyan.FFmpeg`
-- For CUDA, an NVIDIA GPU with matching cuBLAS and cuDNN
+- For CUDA, an NVIDIA GPU plus cuBLAS and cuDNN (about 1.3 GB): `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`. The app finds these libraries on its own, and the GPU keeps driving your display while it transcribes
 
 ## License
 

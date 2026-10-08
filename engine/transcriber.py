@@ -8,6 +8,7 @@ FFT，一小時的影片需要一整塊 GB 級的連續記憶體，容易失敗�
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 # MKL 預設啟用「快速記憶體管理器」，會先向系統要一大塊記憶體池。在認可額度
 # （commit limit＝實體記憶體＋分頁檔）吃緊的機器上，這會讓模型連載入都失敗，
@@ -23,6 +24,32 @@ CHUNK_SEC = 240.0        # 超過此長度就分段辨識
 CPU_THREADS = 4          # ctranslate2 每條執行緒都配一份工作緩衝區，開滿核心很吃記憶體
 
 _model_cache: dict = {}
+
+
+def _add_cuda_dll_dirs():
+    """Windows：讓 ctranslate2 找得到 pip 裝的 NVIDIA 函式庫。
+    `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12` 會把 cublas64_12.dll、cudnn64_9.dll
+    放在 site-packages/nvidia/*/bin，但這些資料夾不在 DLL 搜尋路徑裡，不加就會出現
+    「Library cublas64_12.dll is not found」。"""
+    if os.name != 'nt' or getattr(_add_cuda_dll_dirs, 'done', False):
+        return
+    _add_cuda_dll_dirs.done = True
+    import site
+    import sys
+    roots = [Path(p) / 'nvidia' for p in [*site.getsitepackages(), site.getusersitepackages(),
+                                          *sys.path] if p]
+    seen = set()
+    for root in roots:
+        for d in root.glob('*/bin') if root.is_dir() else []:
+            key = str(d.resolve()).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                os.add_dll_directory(str(d))
+            except OSError:
+                continue
+            os.environ['PATH'] = str(d) + os.pathsep + os.environ.get('PATH', '')
 
 
 def is_cjk(text: str) -> bool:
@@ -67,6 +94,8 @@ def get_model(size: str = 'small', device: str = 'cpu',
     key = (size, device, cpu_threads)
     if key in _model_cache:
         return _model_cache[key]
+    if device != 'cpu':
+        _add_cuda_dll_dirs()
     from faster_whisper import WhisperModel
     compute = 'int8' if device == 'cpu' else 'auto'
     attempts = [cpu_threads, 2, 1] if device == 'cpu' else [0]
