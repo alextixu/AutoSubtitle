@@ -48,8 +48,7 @@ jobs:
       - name: Stamp version
         shell: bash
         run: |
-          printf "__version__ = '%s'
-" "${{ steps.v.outputs.version }}" > engine/_version.py
+          echo "__version__ = '${{ steps.v.outputs.version }}'" > engine/_version.py
           cat engine/_version.py
       - name: Build
         shell: bash
@@ -121,8 +120,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - name: Stamp version
         run: |
-          printf "__version__ = '%s'
-" "${{ steps.v.outputs.version }}" > engine/_version.py
+          echo "__version__ = '${{ steps.v.outputs.version }}'" > engine/_version.py
           cat engine/_version.py
       - name: Build
         env:
