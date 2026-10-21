@@ -1,4 +1,4 @@
-faster-whisper
-opencc-python-reimplemented
-pywebview
-numpy
+faster-whisper>=1.2.1,<2
+opencc-python-reimplemented>=0.1.7
+pywebview>=6.2,<7
+numpy>=2,<3

@@ -193,7 +193,7 @@ def get_model(size: str = 'small', device: str = 'cpu',
         f'關閉佔記憶體的程式，或調大 Windows 分頁檔。原始錯誤：{last_err}')
 
 
-MODEL_LADDER = ['large-v3', 'medium', 'small', 'base', 'tiny']
+MODEL_LADDER = ['large-v3', 'large-v3-turbo', 'medium', 'small', 'base', 'tiny']
 
 
 def load_model_with_fallback(size: str, device: str = 'cpu',
@@ -303,7 +303,10 @@ def transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
     compute_type。device='auto' 時能用 GPU 就用 GPU。
     on_model: 可選 callback(dict)，模型載入後通知實際使用的模型與裝置。"""
     device = resolve_device(device)
-    base_prompt = '、'.join(glossary_words) + '。' if glossary_words else ''
+    # 詞庫改走 hotwords：faster-whisper 每個 30 秒視窗都會重新注入（上限 223 個 token）。
+    # 放在 initial_prompt 會被前一段的文字擠掉（prompt 只保留最後 223 個 token），
+    # 詞庫超過約 60 個中文字時實際上只在第一個視窗生效。
+    hotwords = '、'.join(glossary_words) if glossary_words else None
 
     audio = decode_audio(path, start=start_sec, end=end_sec)
     total = max(len(audio) / SAMPLE_RATE, 0.001)
@@ -328,10 +331,10 @@ def transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
             if len(clip) < SAMPLE_RATE * 0.1:
                 continue
             # 帶上一段結尾當上下文，讓跨段語意連貫
-            prompt = (base_prompt + prev_tail).strip() or None
+            prompt = prev_tail.strip() or None
             segments, info = model.transcribe(
                 clip, language=language, word_timestamps=True,
-                initial_prompt=prompt, vad_filter=True,
+                initial_prompt=prompt, hotwords=hotwords, vad_filter=True,
             )
             if language is None:
                 language, lang_prob = info.language, info.language_probability

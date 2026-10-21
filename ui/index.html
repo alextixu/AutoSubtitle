@@ -91,6 +91,7 @@
                 <button data-v="base" role="radio">base</button>
                 <button data-v="small" role="radio" class="on">small</button>
                 <button data-v="medium" role="radio">medium</button>
+                <button data-v="large-v3-turbo" role="radio" title="large-v3-turbo：接近 large 的準確度，速度接近 medium">turbo</button>
                 <button data-v="large-v3" role="radio">large</button>
               </div>
               <span class="hint">越大越準也越慢</span>
@@ -195,6 +196,8 @@
               <option value="base">base</option>
               <option value="small" selected>small（推薦）</option>
               <option value="medium">medium（更準）</option>
+              <option value="large-v3-turbo">turbo（接近 large、速度接近 medium）</option>
+              <option value="large-v3">large-v3（最準，建議 GPU）</option>
             </select>
             <button id="btnTranscribe" class="btn primary">開始辨識</button>
             <div id="jobBar" class="job-bar hidden"><div id="jobFill"></div></div>

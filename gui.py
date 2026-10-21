@@ -32,7 +32,7 @@ APP_TITLE = 'AutoSubtitle 字幕工房'
 DEFAULT_OUTDIR = OUTPUT_DIR
 MEDIA_FILTER = '影音檔 (*.mp4;*.mov;*.mkv;*.webm;*.avi;*.mp3;*.wav;*.m4a;*.aac;*.flac)'
 ALL_FILTER = '所有檔案 (*.*)'
-MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3']
+MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo', 'large-v3']
 LOG_KEEP = 300  # 紀錄最多保留的行數
 
 

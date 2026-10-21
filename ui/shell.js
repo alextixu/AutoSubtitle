@@ -15,7 +15,7 @@
     const lines = ['大家好，今天要介紹的是本機離線語音辨識。', '影片不會上傳到任何雲端，也不需要登入。',
                    '選好檔案以後按開始轉檔，就會產出三種檔案。', '長影片可以只轉其中一段，省下等待時間。'];
     return {
-      get_info: async () => ({ app: 'AutoSubtitle 字幕工房（mock）', initial_view: 'transcribe', outdir: 'E:\\AutoSubtitle\\output', models: ['tiny', 'base', 'small', 'medium', 'large-v3'], ffmpeg: false,
+      get_info: async () => ({ app: 'AutoSubtitle 字幕工房（mock）', initial_view: 'transcribe', outdir: 'E:\\AutoSubtitle\\output', models: ['tiny', 'base', 'small', 'medium', 'large-v3-turbo', 'large-v3'], ffmpeg: false,
         compute: { cuda_devices: 1, cuda_libs: true, gpu_ok: true, gpu_name: 'NVIDIA GeForce RTX 3080 Ti', reason: '', auto: 'cuda', cpu_label: 'CPU · 4 執行緒', gpu_label: 'GPU · NVIDIA GeForce RTX 3080 Ti', auto_label: 'GPU · NVIDIA GeForce RTX 3080 Ti', hint: 'pip install nvidia-cublas-cu12 nvidia-cudnn-cu12' } }),
       open_folder: async () => (toast('mock 模式無法開資料夾'), { ok: true }),
       copy_text: async () => ({ ok: false }),

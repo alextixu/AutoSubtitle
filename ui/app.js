@@ -697,7 +697,8 @@ function showKeys() {
   setupWave();
 
   document.addEventListener('keydown', e => {
-    if (!state.name) return;   // 不在編輯畫面（例如逐字稿轉檔）時不攔快捷鍵
+    // 不在編輯畫面時不攔快捷鍵：切到逐字稿轉檔頁後 state.name 仍在，要再看畫面是否可見
+    if (!state.name || $('view-editor').classList.contains('hidden')) return;
     if (state.editing >= 0 || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
     if (e.code === 'Space') { e.preventDefault(); video.paused ? video.play() : video.pause(); }
     else if (e.key === 'b' || e.key === 'B') splitAtPlayhead();

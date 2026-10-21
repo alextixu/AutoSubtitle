@@ -13,6 +13,9 @@ glossary.json
 styles.json
 *.burn.ass
 
+# 從原始碼執行時的紀錄檔 / log when run from source
+autosubtitle.log
+
 # 編輯器 / 工具 / Editor and tool settings
 .claude/
 .vscode/
