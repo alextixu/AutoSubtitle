@@ -203,7 +203,7 @@ function editCue(i) {
   if (state.editing >= 0) commitEdit();
   state.editing = i;
   const row = $('cueList').querySelector(`[data-i="${i}"]`);
-  if (!row) return;
+  if (!row) { state.editing = -1; return; }   // 搜尋過濾下該列不在畫面上
   const c = state.cues[i];
   const input = Object.assign(document.createElement('input'), { className: 'cue-edit', value: c.text });
   input.dataset.old = c.text;
@@ -211,7 +211,12 @@ function editCue(i) {
   input.focus();
   input.onkeydown = e => {
     if (e.key === 'Enter') { e.preventDefault(); splitCue(i, input.selectionStart, input.value); }
-    else if (e.key === 'Tab') { e.preventDefault(); commitEdit(); editCue(Math.min(i + 1, state.cues.length - 1)); }
+    else if (e.key === 'Tab') {
+      e.preventDefault();
+      const next = nextVisibleIndex(i, e.shiftKey ? -1 : 1);
+      commitEdit();
+      if (next >= 0) editCue(next);
+    }
     else if (e.key === 'Escape') { state.editing = -1; renderCues(); }
     else if (e.key === 'Backspace' && input.selectionStart === 0 && input.selectionEnd === 0) {
       e.preventDefault(); commitEdit(); mergeCue(i);
@@ -227,18 +232,29 @@ async function commitEdit() {
   const input = document.querySelector('.cue-edit');
   if (!input) return;
   const oldText = input.dataset.old, newText = input.value.trim();
-  if (newText && newText !== oldText) {
+  const changed = !!newText && newText !== oldText;
+  if (changed) {
     state.cues[i].text = newText;
     state.cues[i].words = remapWords(state.cues[i], newText);
     saveProject();
-    const cands = await api.learn_from_edit(oldText, newText);
-    for (const w of cands) {
-      toast(`把「${w}」加入詞庫？下次辨識會優先採用`, [
-        { label: '加入', fn: async () => { await api.glossary_add(w); toast(`已加入詞庫：${w}`); } },
-      ]);
-    }
   }
   renderCues();
+  if (!changed) return;
+  const cands = await api.learn_from_edit(oldText, newText);
+  for (const w of cands) {
+    toast(`把「${w}」加入詞庫？下次辨識會優先採用`, [
+      { label: '加入', fn: async () => { await api.glossary_add(w); toast(`已加入詞庫：${w}`); } },
+    ]);
+  }
+}
+
+// 目前畫面上（搜尋過濾後）第 i 句的前一句／下一句索引；沒有就回 -1
+function nextVisibleIndex(i, dir) {
+  const rows = [...$('cueList').querySelectorAll('.cue-row')].map(r => +r.dataset.i);
+  const pos = rows.indexOf(i);
+  if (pos < 0) return -1;
+  const k = pos + dir;
+  return k >= 0 && k < rows.length ? rows[k] : -1;
 }
 
 // 文字改了之後，把詞級時間戳等比重新對映（維持卡拉OK可用）
