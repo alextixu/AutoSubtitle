@@ -53,6 +53,7 @@
 |---|---|---|
 | 逐字稿輸出 | `文件\AutoSubtitle` | `~/Documents/AutoSubtitle` |
 | 專案、詞庫、樣式、紀錄檔 | `%APPDATA%\AutoSubtitle` | `~/Library/Application Support/AutoSubtitle` |
+| 模型檔（下載版） | `%APPDATA%\AutoSubtitle\models` | `~/Library/Application Support/AutoSubtitle/models` |
 
 ## 從原始碼執行
 

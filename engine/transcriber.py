@@ -15,6 +15,9 @@ from pathlib import Path
 # 即使實體記憶體還很空。關掉它換取可載入性，效能影響很小。
 # 必須在 import ctranslate2/faster_whisper 之前設定才有效（本檔延後 import）。
 os.environ.setdefault('MKL_DISABLE_FAST_MM', '1')
+# 下載模型時不送遙測、不帶本機登入的 Hugging Face token（隱私：只為了抓模型檔）
+os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
+os.environ.setdefault('HF_HUB_DISABLE_IMPLICIT_TOKEN', '1')
 
 MAX_CHARS_CJK = 16
 MAX_CHARS_LATIN = 42
@@ -175,12 +178,15 @@ def get_model(size: str = 'small', device: str = 'cpu',
     if device != 'cpu':
         _add_cuda_dll_dirs()
     from faster_whisper import WhisperModel
+    from engine.paths import MODELS_DIR
     compute = 'int8' if device == 'cpu' else 'auto'
     attempts = [cpu_threads, 2, 1] if device == 'cpu' else [0]
     last_err = None
     for n in attempts:
         try:
             kw = {'cpu_threads': n} if (device == 'cpu' and n) else {}
+            if MODELS_DIR:
+                kw['download_root'] = str(MODELS_DIR)
             model = WhisperModel(size, device=device, compute_type=compute, **kw)
             _model_cache[key] = model
             return model

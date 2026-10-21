@@ -53,6 +53,7 @@ Where the downloaded app keeps its data:
 |---|---|---|
 | Transcripts | `Documents\AutoSubtitle` | `~/Documents/AutoSubtitle` |
 | Projects, glossary, styles, log | `%APPDATA%\AutoSubtitle` | `~/Library/Application Support/AutoSubtitle` |
+| Model files (downloaded app) | `%APPDATA%\AutoSubtitle\models` | `~/Library/Application Support/AutoSubtitle/models` |
 
 ## Run from source
 
