@@ -25,6 +25,7 @@ sys.path.insert(0, str(APP_DIR))
 from app import Api as EditorApi                                            # noqa: E402
 from engine import exporter, transcriber                                   # noqa: E402
 from engine.paths import DATA_DIR, FROZEN, OUTPUT_DIR, ui_file             # noqa: E402
+from engine._version import __version__                                  # noqa: E402
 from transcribe import fmt_clock, output_stem, parse_time, write_outputs   # noqa: E402
 
 APP_NAME = 'AutoSubtitle'
@@ -246,7 +247,7 @@ class Api(EditorApi):
 
     # ----- 視窗 / 一般 -----
     def get_info(self):
-        return {'app': APP_TITLE, 'initial_view': self._initial_view,
+        return {'app': APP_TITLE, 'version': __version__, 'initial_view': self._initial_view,
                 'outdir': str(self._outdir), 'models': MODELS,
                 'ffmpeg': exporter.has_ffmpeg(), 'platform': sys.platform,
                 'compute': self.get_compute()}
@@ -482,6 +483,9 @@ def _quiet_streams():
 
 
 def main(default_view: str = 'transcribe'):
+    if '--version' in sys.argv:
+        print(f'{APP_NAME} {__version__}')
+        return
     _quiet_streams()
     if '--uitest' in sys.argv:
         _hard_exit(uitest(sys.argv[sys.argv.index('--uitest') + 1]))

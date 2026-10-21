@@ -45,6 +45,12 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-dev.${GITHUB_SHA::7}"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Stamp version
+        shell: bash
+        run: |
+          printf "__version__ = '%s'
+" "${{ steps.v.outputs.version }}" > engine/_version.py
+          cat engine/_version.py
       - name: Build
         shell: bash
         env:
@@ -113,6 +119,11 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-dev.${GITHUB_SHA::7}"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Stamp version
+        run: |
+          printf "__version__ = '%s'
+" "${{ steps.v.outputs.version }}" > engine/_version.py
+          cat engine/_version.py
       - name: Build
         env:
           APP_VERSION: ${{ steps.v.outputs.version }}

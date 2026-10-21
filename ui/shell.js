@@ -290,6 +290,7 @@
     let info = {};
     try { info = (await tx.get_info()) || {}; } catch (e) { info = {}; }
     bindTranscribe(info);
+    $('appVersion').textContent = info.version && info.version !== '0.0.0-dev' ? `v${info.version}` : (info.version ? '開發版' : '');
     st.compute = info.compute || null;
     $('txDevice').addEventListener('change', renderDevice);
     renderDevice();
