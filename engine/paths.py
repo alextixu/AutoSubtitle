@@ -52,9 +52,9 @@ def _documents_dir() -> Path:
 
 
 DATA_DIR = _user_data_dir() if FROZEN else SOURCE_DIR
-# 模型檔：打包版放在自己的資料夾，解除安裝時找得到、也能在介面裡管理；
-# 從原始碼執行時維持 Hugging Face 預設快取（None），避免開發機重複下載。
-MODELS_DIR = (DATA_DIR / 'models') if FROZEN else None
+# 模型檔：放在程式自己的資料夾，解除安裝時找得到、也能在「模型」頁管理。
+# 以前下載到 Hugging Face 預設快取的模型仍會被找到沿用（見 engine/models.py）。
+MODELS_DIR = DATA_DIR / 'models'
 OUTPUT_DIR = (_documents_dir() / APP_NAME) if FROZEN else SOURCE_DIR / 'output'
 
 

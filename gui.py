@@ -23,7 +23,7 @@ APP_DIR = Path(__file__).parent
 sys.path.insert(0, str(APP_DIR))
 
 from app import Api as EditorApi                                            # noqa: E402
-from engine import exporter, transcriber                                   # noqa: E402
+from engine import exporter, models, transcriber                           # noqa: E402
 from engine.paths import DATA_DIR, FROZEN, OUTPUT_DIR, ui_file             # noqa: E402
 from engine._version import __version__                                  # noqa: E402
 from transcribe import fmt_clock, output_stem, parse_time, write_outputs   # noqa: E402
@@ -85,6 +85,10 @@ class TranscribeJob:
         self.t0 = 0.0
         self.elapsed = 0.0
         self.device: dict | None = None   # 實際使用的運算裝置（模型載入後才知道）
+        self.stage = ''                   # download / decode / load / transcribe
+        self.stage_frac: float | None = None
+        self.download: dict | None = None # {model, done, total, speed}
+        self.recog_t0 = 0.0
 
     @property
     def busy(self) -> bool:
@@ -102,9 +106,18 @@ class TranscribeJob:
     def snapshot(self) -> dict:
         with self.lock:
             elapsed = self.elapsed if self.state not in ('running', 'cancelling') else time.time() - self.t0
+            eta = None
+            if self.stage == 'transcribe' and self.progress > 0.03 and self.recog_t0:
+                spent = time.time() - self.recog_t0
+                eta = round(spent / self.progress * (1 - self.progress))
+            elif self.stage == 'download' and self.download and self.download.get('speed'):
+                d = self.download
+                eta = round(max(d['total'] - d['done'], 0) / d['speed'])
             return {'state': self.state, 'progress': self.progress, 'status': self.status_text,
                     'logs': list(self.logs), 'error': self.error, 'elapsed': round(elapsed, 1),
-                    'summary': (self.result or {}).get('summary'), 'device': self.device}
+                    'summary': (self.result or {}).get('summary'), 'device': self.device,
+                    'stage': self.stage, 'stage_frac': self.stage_frac,
+                    'download': self.download, 'eta': eta}
 
     def start(self, p: dict):
         self.reset()
@@ -118,8 +131,7 @@ class TranscribeJob:
         self.log(f'辨識 {p["src"].name}（模型 {p["model"]}{span}）')
         if p['words']:
             self.log(f'詞庫載入 {len(p["words"])} 個詞')
-        self.log('第一次用某個模型會先下載模型檔，之後離線可用。')
-        self.status('載入模型中…')
+        self.status('準備中…')
         self.thread = threading.Thread(target=self._work, args=(p,), daemon=True)
         self.thread.start()
 
@@ -128,14 +140,18 @@ class TranscribeJob:
             self.cancel.set()
             with self.lock:
                 self.state = 'cancelling'
-                self.status_text = '取消中…（等目前這句辨識完）'
+                self.status_text = '取消中…'
 
     def _work(self, p: dict):
         def prog(x: float):
             if self.cancel.is_set():
                 raise Cancelled
             with self.lock:
+                if self.stage != 'transcribe':
+                    self.stage, self.recog_t0 = 'transcribe', time.time()
+                    self.status_text = '辨識中…'
                 self.progress = float(x)
+                self.stage_frac = float(x)
 
         old_out, old_err = sys.stdout, sys.stderr
         sys.stdout, sys.stderr = _JobWriter(self, 'log'), _JobWriter(self, 'status')
@@ -143,25 +159,50 @@ class TranscribeJob:
             r = transcriber.transcribe(
                 str(p['src']), model_size=p['model'], device=p['device'], lang=p['lang'],
                 glossary_words=p['words'], to_taiwan=p['to_tw'], progress=prog,
-                start_sec=p['start'], end_sec=p['end'], on_model=self._on_model)
+                start_sec=p['start'], end_sec=p['end'], on_model=self._on_model,
+                on_stage=self._on_stage)
             if self.cancel.is_set():
                 raise Cancelled
             p['outdir'].mkdir(parents=True, exist_ok=True)
             files = write_outputs(r['cues'], p['outdir'], output_stem(p['src'], p['start'], p['end']))
             self._finish(r, files, p)
-        except Cancelled:
+        except (Cancelled, models.DownloadCancelled):
             with self.lock:
                 self.state, self.elapsed = 'cancelled', time.time() - self.t0
                 self.status_text = '已取消'
             self.log('已取消。')
         except Exception as e:  # noqa: BLE001
-            msg = f'{type(e).__name__}: {e}'
+            if isinstance(e, RuntimeError) and self.stage == 'download':
+                msg = str(e)               # 下載錯誤已翻成人話（models.friendly_error）
+            else:
+                msg = f'{type(e).__name__}: {e}'
             self.log('失敗：' + msg)
             with self.lock:
                 self.state, self.error, self.elapsed = 'error', msg, time.time() - self.t0
                 self.status_text = '失敗，詳見紀錄'
         finally:
             sys.stdout, sys.stderr = old_out, old_err
+
+    def _on_stage(self, stage: str, frac, extra):
+        if self.cancel.is_set():
+            raise Cancelled
+        texts = {'decode': '讀取音訊中…', 'load': '載入模型中…'}
+        with self.lock:
+            first = stage != self.stage
+            self.stage, self.stage_frac = stage, frac
+            if stage == 'download':
+                self.download = dict(extra or {})
+                self.status_text = '下載模型「' + models.info(self.download['model'])['label'] + '」…'
+            else:
+                self.status_text = texts.get(stage, self.status_text)
+        if first and stage == 'download':
+            m = models.info(extra['model'])
+            self.log('第一次使用「%s」模型（%s），先下載 %.0f MB，之後離線可用。'
+                     % (m['label'], extra['model'], extra['total'] / 1e6))
+        elif first and stage == 'decode':
+            self.log('讀取音訊…')
+        elif first and stage == 'load':
+            self.log('載入模型 %s…' % (extra or {}).get('model', ''))
 
     def _on_model(self, info: dict):
         with self.lock:
@@ -243,6 +284,7 @@ class Api(EditorApi):
         super().__init__()
         self._initial_view = initial_view
         self._tx = TranscribeJob()
+        self._dl_errors: dict[str, str] = {}
         self._outdir = DEFAULT_OUTDIR
 
     # ----- 視窗 / 一般 -----
@@ -353,6 +395,52 @@ class Api(EditorApi):
 
     def tx_busy(self):
         return self._tx.busy
+
+    # ----- 模型管理 -----
+    def models_list(self):
+        info = transcriber.compute_info()
+        lst = models.status()
+        for m in lst:
+            m['error'] = self._dl_errors.get(m['id'])
+        return {'root': str(models.root()), 'models': lst,
+                'recommended': 'large-v3-turbo' if info.get('gpu_ok') else 'small',
+                'used': sum(m['size_on_disk'] for m in lst)}
+
+    def model_download(self, model_id: str):
+        try:
+            models.info(model_id)
+        except ValueError as e:
+            return {'error': str(e)}
+        if model_id in models.active():
+            return {'ok': True}
+        self._dl_errors.pop(model_id, None)
+
+        def run():
+            try:
+                models.download(model_id)
+            except models.DownloadCancelled:
+                pass
+            except Exception as e:  # noqa: BLE001
+                self._dl_errors[model_id] = str(e) if isinstance(e, RuntimeError) else models.friendly_error(e)
+        threading.Thread(target=run, daemon=True).start()
+        time.sleep(0.1)   # 讓下載狀態先登記，前端馬上輪詢就看得到
+        return {'ok': True}
+
+    def model_cancel(self, model_id: str):
+        return {'ok': models.cancel(model_id)}
+
+    def model_delete(self, model_id: str):
+        if self._tx.busy:
+            return {'error': '正在轉檔，請等轉檔結束再刪除模型'}
+        try:
+            freed = models.delete(model_id)
+        except (RuntimeError, ValueError, OSError) as e:
+            return {'error': str(e)}
+        transcriber.release_model(model_id)
+        return {'ok': True, 'freed': freed}
+
+    def open_models_folder(self):
+        return self.open_folder(str(models.root()))
 
 
 def _fallback_error(msg: str):

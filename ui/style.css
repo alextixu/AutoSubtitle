@@ -98,6 +98,7 @@ input[type=range]{accent-color:var(--accent);height:4px}
   font:500 13px var(--font);color:var(--ink-2);cursor:pointer;transition:background .15s,color .15s,box-shadow .15s}
 .seg button:hover{color:var(--ink)}
 .seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.14)}
+.seg button.dl::after{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ok);margin-left:6px;vertical-align:2px}
 .seg button:focus-visible{outline:none;box-shadow:0 0 0 3px var(--accent-soft)}
 .seg.sm button{padding:4px 12px;font-size:12.5px}
 
@@ -185,6 +186,7 @@ input[type=range]{accent-color:var(--accent);height:4px}
 .progress-wrap{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
 .progress{height:6px;border-radius:var(--pill);background:var(--surface-3);overflow:hidden;position:relative}
 #txFill{height:100%;width:0;background:var(--accent);border-radius:var(--pill);transition:width .3s}
+.progress .fill{height:100%;width:0;background:var(--accent);border-radius:var(--pill);transition:width .3s}
 .progress.indeterminate #txFill{width:30%;position:absolute;animation:slide 1.4s ease-in-out infinite}
 @keyframes slide{0%{left:-30%}100%{left:100%}}
 .status-line{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;color:var(--ink-2)}
@@ -283,6 +285,37 @@ input[type=range]{accent-color:var(--accent);height:4px}
 .cue-tools span:hover{background:var(--surface);color:var(--ink)}
 
 /* ===== 彈窗 ===== */
+/* ===== 模型頁 ===== */
+.store-card{padding:14px 18px}
+.store-row{display:flex;align-items:center;gap:14px}
+.store-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.store-text b{font-size:15px;font-weight:600}
+.md-list{display:flex;flex-direction:column;gap:10px}
+.md-row{flex-direction:row;align-items:center;gap:16px;padding:16px 18px}
+.md-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.md-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.md-title b{font-size:15px;font-weight:600}
+.md-id{font:12px ui-monospace,Consolas,monospace;color:var(--ink-2);background:var(--surface-2);
+  padding:1px 8px;border-radius:var(--pill)}
+.badge{font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:var(--pill);background:var(--surface-2);color:var(--ink-2)}
+.badge.ok{background:rgba(52,199,89,.16);color:var(--ok)}
+.badge.rec{background:var(--accent-soft);color:var(--accent)}
+.badge.part{background:rgba(255,159,10,.16);color:var(--warn)}
+.md-desc{color:var(--ink-2);font-size:13px}
+.md-progress{display:flex;align-items:center;gap:10px;margin-top:4px}
+.md-progress .progress{flex:1}
+.md-progress span{font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.md-err{color:var(--danger);font-size:12.5px;user-select:text}
+.md-side{display:flex;align-items:center;gap:10px;flex:none}
+.md-size{color:var(--ink-2);font-size:13px;font-variant-numeric:tabular-nums;min-width:64px;text-align:right}
+.md-foot{padding:0 4px}
+.nav-badge{margin-left:auto;font-size:11px;font-weight:600;padding:1px 7px;border-radius:var(--pill);
+  background:var(--accent);color:#fff;font-variant-numeric:tabular-nums}
+.nav-item.active .nav-badge{background:rgba(255,255,255,.25)}
+.job-status{font-size:12.5px;color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
+.modal .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+.modal p{color:var(--ink-2);line-height:1.6}
+
 .modal-back{position:fixed;inset:0;background:rgba(0,0,0,.28);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
   display:flex;align-items:center;justify-content:center;z-index:50}
 .modal{background:var(--surface);border-radius:20px;padding:24px 26px;width:min(560px,92vw);max-height:80vh;

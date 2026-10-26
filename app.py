@@ -179,14 +179,26 @@ class Api:
         if not data or not Path(data['media']).exists():
             return {'error': '找不到媒體檔'}
         self._job = {'state': 'running', 'progress': 0.0, 'error': None, 'project': name,
-                     'device': None}
+                     'device': None, 'stage': '', 'status': '準備中…'}
+
+        def on_stage(stage, frac, extra):
+            if stage == 'download' and extra:
+                self._job.update(stage=stage, progress=frac or 0.0,
+                                 status='下載模型 %.0f/%.0f MB' % (extra['done'] / 1e6, extra['total'] / 1e6))
+            elif stage == 'decode':
+                self._job.update(stage=stage, progress=0.0, status='讀取音訊中…')
+            elif stage == 'load':
+                self._job.update(stage=stage, progress=0.0, status='載入模型中…')
+
+        def on_prog(p):
+            self._job.update(stage='transcribe', progress=p, status='辨識中 %.0f%%' % (p * 100))
 
         def run():
             try:
                 r = transcriber.transcribe(
                     data['media'], model_size=model_size, device='auto',
                     glossary_words=self.glossary.words,
-                    progress=lambda p: self._job.update(progress=p),
+                    progress=on_prog, on_stage=on_stage,
                     on_model=lambda info: self._job.update(device=info))
                 data['cues'] = r['cues']
                 data['language'] = r['language']

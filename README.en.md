@@ -96,6 +96,16 @@ Each run writes three files:
 
 When you transcribe only part of a file, timestamps still match the original video. The file name gets the range appended, such as `_1300-end`, so it does not overwrite a full-length result.
 
+### Models
+
+The **Models** page in the sidebar lists every speech model with its size, whether it is downloaded, and which one is recommended.
+
+- Download models ahead of time to work offline. Downloads show progress, speed, and time remaining, and can be cancelled.
+- An interrupted download resumes where it stopped.
+- Delete models you no longer need to free space.
+- If you pick a model that isn't downloaded yet, the app asks first, then shows four stages: download, read audio, load model, transcribe.
+- Models already in the Hugging Face cache (`~/.cache/huggingface`) are reused.
+
 ### Subtitle editor
 
 1. Enter a project name, choose a media file, and create the project.

@@ -146,6 +146,7 @@ async function startTranscribe() {
   const poll = setInterval(async () => {
     const j = await api.get_job();
     $('jobFill').style.width = `${Math.round(j.progress * 100)}%`;
+    if (j.status) { $('jobStatus').textContent = j.status; $('jobStatus').classList.remove('hidden'); }
     if (j.device) {
       devChip.textContent = devName(j);
       devChip.title = `${j.device.device_label}，${j.device.compute_type}`;
@@ -153,13 +154,13 @@ async function startTranscribe() {
       if (sc && !sc.isRunning()) sc.setSide((j.device.device_used === 'cuda' ? 'gpu' : 'cpu') + ' busy', '辨識中使用', devName(j), devChip.title);
     }
     if (j.state === 'done') {
-      clearInterval(poll); $('jobBar').classList.add('hidden');
+      clearInterval(poll); $('jobBar').classList.add('hidden'); $('jobStatus').classList.add('hidden');
       const used = devName(j); endDev();
       const d = await api.open_project(state.name);
       state.cues = d.cues; renderCues();
       toast(`辨識完成：${state.cues.length} 條字幕${used ? `（${used}）` : ''}`);
     } else if (j.state === 'error') {
-      clearInterval(poll); $('jobBar').classList.add('hidden'); endDev();
+      clearInterval(poll); $('jobBar').classList.add('hidden'); $('jobStatus').classList.add('hidden'); endDev();
       toast('辨識失敗：' + j.error);
     }
   }, 500);

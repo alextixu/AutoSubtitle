@@ -9,6 +9,7 @@ venv/
 # User data: transcripts, local projects, glossary and saved styles
 output/
 projects/
+models/
 glossary.json
 styles.json
 *.burn.ass

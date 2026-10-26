@@ -178,16 +178,15 @@ def get_model(size: str = 'small', device: str = 'cpu',
     if device != 'cpu':
         _add_cuda_dll_dirs()
     from faster_whisper import WhisperModel
-    from engine.paths import MODELS_DIR
+    from engine import models
+    path = models.local_path(size) or models.download(size)   # 平常已由 transcribe 帶進度先下載好
     compute = 'int8' if device == 'cpu' else 'auto'
     attempts = [cpu_threads, 2, 1] if device == 'cpu' else [0]
     last_err = None
     for n in attempts:
         try:
             kw = {'cpu_threads': n} if (device == 'cpu' and n) else {}
-            if MODELS_DIR:
-                kw['download_root'] = str(MODELS_DIR)
-            model = WhisperModel(size, device=device, compute_type=compute, **kw)
+            model = WhisperModel(path, device=device, compute_type=compute, **kw)
             _model_cache[key] = model
             return model
         except (RuntimeError, MemoryError) as e:
@@ -200,6 +199,14 @@ def get_model(size: str = 'small', device: str = 'cpu',
 
 
 MODEL_LADDER = ['large-v3', 'large-v3-turbo', 'medium', 'small', 'base', 'tiny']
+
+
+def release_model(size: str):
+    """放掉某個模型的快取（刪除模型檔前呼叫，避免檔案被佔用）"""
+    for key in [k for k in _model_cache if k[0] == size]:
+        _model_cache.pop(key, None)
+    import gc
+    gc.collect()
 
 
 def load_model_with_fallback(size: str, device: str = 'cpu',
@@ -241,10 +248,11 @@ def clean_cues(cues: list[dict]) -> list[dict]:
 
 
 def decode_audio(path: str, sr: int = SAMPLE_RATE,
-                 start: float = 0.0, end: float | None = None):
+                 start: float = 0.0, end: float | None = None, progress=None):
     """用 PyAV 把任何影音檔解成 16kHz mono float32（-1~1），只讀音訊軌。
     start/end（秒）只取一段：先 seek 到 start 前最近的封包，不必從頭讀整個檔案，
-    再依第一個解出的音框時間把多解的部分精準裁掉。"""
+    再依第一個解出的音框時間把多解的部分精準裁掉。
+    progress(比例 0~1) 每解一段就呼叫一次；它可以拋例外來中止解碼。"""
     import av
     import numpy as np
     parts = []
@@ -257,8 +265,19 @@ def decode_audio(path: str, sr: int = SAMPLE_RATE,
         if start > 0:
             container.seek(int(start / stream.time_base), stream=stream, backward=True)
         resampler = av.AudioResampler(format='s16', layout='mono', rate=sr)
+        total = None
+        if container.duration:
+            total = container.duration / 1_000_000
+        elif stream.duration:
+            total = float(stream.duration * stream.time_base)
+        span_end = min(end, total) if (end is not None and total) else (end or total)
+        span = (span_end - start) if span_end else None
+        last_report = -1.0
         for frame in container.decode(stream):
             t = float(frame.pts * stream.time_base) if frame.pts is not None else None
+            if progress and t is not None and span and t - last_report >= 2.0:
+                last_report = t
+                progress(min(max((t - start) / span, 0.0), 1.0))
             if first_t is None:
                 first_t = t if t is not None else 0.0
             if end is not None and t is not None and t > end:
@@ -300,21 +319,36 @@ def transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
                chunk_sec: float = CHUNK_SEC,
                cpu_threads: int = CPU_THREADS,
                start_sec: float = 0.0, end_sec: float | None = None,
-               on_model=None) -> dict:
+               on_model=None, on_stage=None) -> dict:
     """辨識檔案 → {language, cues:[{start,end,text,words:[[字,起,迄],…]}]}
     progress: 可選 callback(比例 0~1)。長檔案自動分段，記憶體用量固定。
     start_sec/end_sec 只辨識其中一段，輸出時間仍是原檔案的時間。
     記憶體不足時自動改用能跑的最大模型（載入階段與推論階段都會降級），
     實際使用的模型記在回傳的 model_used；實際使用的裝置記在 device_used、device_label、
     compute_type。device='auto' 時能用 GPU 就用 GPU。
-    on_model: 可選 callback(dict)，模型載入後通知實際使用的模型與裝置。"""
+    on_model: 可選 callback(dict)，模型載入後通知實際使用的模型與裝置。
+    on_stage: 可選 callback(stage, frac, extra)，stage 依序為 download（下載模型，extra 含
+    done/total/speed）、decode（解碼音訊）、load（載入模型，frac 為 None）；辨識進度仍走 progress。
+    callback 拋出的例外會中止整個工作（取消就是這樣做的）。"""
+    from engine import models
     device = resolve_device(device)
+    stage = on_stage or (lambda *a, **k: None)
+
+    def ensure_model(size: str):
+        if models.local_path(size):
+            return
+        stage('download', 0.0, {'model': size, 'done': 0, 'total': models.info(size)['bytes'], 'speed': 0})
+        models.download(size, progress=lambda d, t, sp: stage(
+            'download', (d / t) if t else 0.0, {'model': size, 'done': d, 'total': t, 'speed': sp}))
+
+    ensure_model(model_size)
     # 詞庫改走 hotwords：faster-whisper 每個 30 秒視窗都會重新注入（上限 223 個 token）。
     # 放在 initial_prompt 會被前一段的文字擠掉（prompt 只保留最後 223 個 token），
     # 詞庫超過約 60 個中文字時實際上只在第一個視窗生效。
     hotwords = '、'.join(glossary_words) if glossary_words else None
 
-    audio = decode_audio(path, start=start_sec, end=end_sec)
+    stage('decode', 0.0, None)
+    audio = decode_audio(path, start=start_sec, end=end_sec, progress=lambda f: stage('decode', f, None))
     total = max(len(audio) / SAMPLE_RATE, 0.001)
 
     # 切出分段邊界（都落在安靜處）
@@ -387,6 +421,8 @@ def transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
     last_err: Exception | None = None
     for size in ladder:
         try:
+            ensure_model(size)
+            stage('load', None, {'model': size})
             model = get_model(size, device, cpu_threads)
         except MemoryError as e:
             last_err = e
