@@ -10,6 +10,9 @@ venv/
 output/
 projects/
 models/
+logs/
+settings.json
+update.json
 glossary.json
 styles.json
 *.burn.ass

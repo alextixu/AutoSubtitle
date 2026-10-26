@@ -156,11 +156,27 @@ def _endpoint() -> str:
     return os.environ.get('HF_ENDPOINT', 'https://huggingface.co').rstrip('/')
 
 
-def _list_files(repo: str, client) -> list[tuple[str, int]]:
+def _ssl_context():
+    """打包後的 macOS Python 可能找不到系統憑證，優先用 certifi 的憑證包"""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        return ssl.create_default_context()
+
+
+def _open(url: str, headers: dict | None = None, timeout: float = 60):
+    import urllib.request
+    req = urllib.request.Request(url, headers={'User-Agent': 'AutoSubtitle', **(headers or {})})
+    return urllib.request.urlopen(req, timeout=timeout, context=_ssl_context())  # noqa: S310  # 只連 HF 端點
+
+
+def _list_files(repo: str) -> list[tuple[str, int]]:
     """從 Hugging Face API 取得要下載的檔案與大小；只取 faster-whisper 需要的檔。"""
-    r = client.get(f'{_endpoint()}/api/models/{repo}/tree/main', timeout=30)
-    r.raise_for_status()
-    files = [(e['path'], int(e.get('size') or 0)) for e in r.json()
+    with _open(f'{_endpoint()}/api/models/{repo}/tree/main', timeout=30) as r:
+        entries = json.loads(r.read().decode('utf-8'))
+    files = [(e['path'], int(e.get('size') or 0)) for e in entries
              if e.get('type') == 'file' and e.get('path') in _WANTED]
     if not any(f == 'model.bin' for f, _ in files):
         raise RuntimeError(f'{repo} 上找不到 model.bin')
@@ -168,57 +184,55 @@ def _list_files(repo: str, client) -> list[tuple[str, int]]:
 
 
 def _download_files(st: _State, should_cancel):
-    import httpx
     m = info(st.model_id)
     dest = _own_dir(st.model_id)
     dest.mkdir(parents=True, exist_ok=True)
     (dest / '.complete').unlink(missing_ok=True)
-    headers = {'User-Agent': 'AutoSubtitle'}
-    with httpx.Client(follow_redirects=True, headers=headers, timeout=httpx.Timeout(30, read=60)) as client:
-        files = _list_files(m['repo'], client)
-        st.total = sum(size for _, size in files) or st.total
-        # 已完成的檔案與 .part 先算進進度
-        st.done = 0
-        for name, size in files:
-            f, part = dest / name, dest / (name + '.part')
-            if f.exists() and (not size or f.stat().st_size == size):
-                st.done += f.stat().st_size
-            elif part.exists():
-                st.done += part.stat().st_size
-        last_t, last_done = time.time(), st.done
-        for name, size in files:
-            f, part = dest / name, dest / (name + '.part')
-            if f.exists() and (not size or f.stat().st_size == size):
-                continue
-            have = part.stat().st_size if part.exists() else 0
-            if size and have > size:          # 壞掉的殘檔
-                part.unlink()
+    files = _list_files(m['repo'])
+    st.total = sum(size for _, size in files) or st.total
+    # 已完成的檔案與 .part 先算進進度
+    st.done = 0
+    for name, size in files:
+        f, part = dest / name, dest / (name + '.part')
+        if f.exists() and (not size or f.stat().st_size == size):
+            st.done += f.stat().st_size
+        elif part.exists():
+            st.done += part.stat().st_size
+    last_t, last_done = time.time(), st.done
+    for name, size in files:
+        f, part = dest / name, dest / (name + '.part')
+        if f.exists() and (not size or f.stat().st_size == size):
+            continue
+        have = part.stat().st_size if part.exists() else 0
+        if size and have > size:          # 壞掉的殘檔
+            part.unlink()
+            st.done -= have
+            have = 0
+        url = f'{_endpoint()}/{m["repo"]}/resolve/main/{name}'
+        # urllib 跟隨轉址時會保留 Range 標頭（HF 會轉到 CDN）
+        with _open(url, headers={'Range': f'bytes={have}-'} if have else None) as r:
+            mode = 'ab' if have else 'wb'
+            if have and getattr(r, 'status', 200) == 200:   # 伺服器不支援續傳，從頭來
                 st.done -= have
                 have = 0
-            req_headers = {'Range': f'bytes={have}-'} if have else {}
-            url = f'{_endpoint()}/{m["repo"]}/resolve/main/{name}'
-            with client.stream('GET', url, headers=req_headers) as r:
-                if have and r.status_code == 200:   # 伺服器不支援續傳，從頭來
-                    st.done -= have
-                    have = 0
-                    mode = 'wb'
-                else:
-                    r.raise_for_status()
-                    mode = 'ab' if have else 'wb'
-                with open(part, mode) as out:
-                    for chunk in r.iter_bytes(CHUNK):
-                        if st.cancel or (should_cancel and should_cancel()):
-                            raise DownloadCancelled
-                        out.write(chunk)
-                        st.done += len(chunk)
-                        now = time.time()
-                        if now - last_t >= 0.5:
-                            inst = (st.done - last_done) / (now - last_t)
-                            st.speed = inst if st.speed == 0 else st.speed * 0.7 + inst * 0.3
-                            last_t, last_done = now, st.done
-            if size and part.stat().st_size != size:
-                raise RuntimeError(f'{name} 下載不完整（{part.stat().st_size}/{size} bytes）')
-            os.replace(part, f)
+                mode = 'wb'
+            with open(part, mode) as out:
+                while True:
+                    if st.cancel or (should_cancel and should_cancel()):
+                        raise DownloadCancelled
+                    chunk = r.read(CHUNK)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    st.done += len(chunk)
+                    now = time.time()
+                    if now - last_t >= 0.5:
+                        inst = (st.done - last_done) / (now - last_t)
+                        st.speed = inst if st.speed == 0 else st.speed * 0.7 + inst * 0.3
+                        last_t, last_done = now, st.done
+        if size and part.stat().st_size != size:
+            raise RuntimeError(f'{name} 下載不完整（{part.stat().st_size}/{size} bytes），請再試一次')
+        os.replace(part, f)
     (dest / '.complete').write_text(json.dumps({'repo': m['repo'], 'files': files,
                                                 'at': time.strftime('%Y-%m-%dT%H:%M:%S')}),
                                     encoding='utf-8')
@@ -281,17 +295,22 @@ def download(model_id: str, progress=None, should_cancel=None) -> str:
 
 def friendly_error(e: BaseException) -> str:
     """把網路例外翻成人話"""
-    name = type(e).__name__
-    text = str(e)
-    if name in ('ConnectError', 'ConnectTimeout') or 'getaddrinfo' in text or 'Name or service' in text:
-        return '連不上 huggingface.co，請確認網路連線後再試（已下載的部分會保留）'
-    if name in ('ReadTimeout', 'RemoteProtocolError', 'ReadError'):
+    import socket
+    import urllib.error
+    if isinstance(e, urllib.error.HTTPError):
+        return f'伺服器回應錯誤（HTTP {e.code}），請稍後再試'
+    if isinstance(e, urllib.error.URLError):
+        reason = e.reason
+        if isinstance(reason, socket.gaierror) or 'getaddrinfo' in str(reason):
+            return '連不上 huggingface.co，請確認網路連線後再試（已下載的部分會保留）'
+        if 'CERTIFICATE' in str(reason).upper():
+            return f'安全連線失敗（憑證驗證錯誤），請檢查系統時間或網路代理設定：{reason}'
+        return f'連線失敗，請確認網路後再試（已下載的部分會保留）：{reason}'
+    if isinstance(e, (TimeoutError, socket.timeout, ConnectionError)):
         return '下載中斷，請再試一次（會從中斷處繼續）'
-    if name == 'HTTPStatusError':
-        return f'伺服器回應錯誤：{text[:120]}'
     if isinstance(e, OSError) and getattr(e, 'errno', None) == 28:
         return '磁碟空間不足，請清出空間後再試'
-    return f'{name}: {text[:200]}'
+    return f'{type(e).__name__}: {str(e)[:200]}'
 
 
 def delete(model_id: str) -> int:

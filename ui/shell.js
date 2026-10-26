@@ -42,6 +42,15 @@
       model_cancel: async id => mockModels.cancel(id),
       model_delete: async id => mockModels.remove(id),
       open_models_folder: async () => (toast('mock 模式無法開資料夾'), { ok: true }),
+      about_info: async () => ({ version: '0.0.0-dev', dev: true, flavor: 'Windows', platform: 'Windows 11 (AMD64)', python: '3.12.3', frozen: false,
+        data_dir: 'C:\\Users\\you\\AppData\\Roaming\\AutoSubtitle', models_dir: 'C:\\Users\\you\\AppData\\Roaming\\AutoSubtitle\\models',
+        log_dir: 'C:\\Users\\you\\AppData\\Roaming\\AutoSubtitle\\logs', output_dir: 'C:\\Users\\you\\Documents\\AutoSubtitle', settings: { check_updates: true }, notices: null }),
+      check_update: async () => ({ current: '1.0.0', latest: '1.1.0', newer: true, asset_name: 'AutoSubtitle-1.1.0-Windows-Setup.exe', asset_url: '#', url: '#' }),
+      set_setting: async () => ({ ok: true }),
+      open_url: async () => (toast('mock 模式不開網址'), { ok: true }),
+      open_logs_folder: async () => (toast('mock 模式無法開資料夾'), { ok: true }),
+      open_notices: async () => (toast('mock 模式'), { ok: true }),
+      diagnostics: async () => 'AutoSubtitle 0.0.0-dev (mock)',
       copy_text: async () => ({ ok: false }),
       tx_pick_media: async () => 'E:\\影片\\會議錄影 2026-10-07.mp4',
       tx_pick_glossary: async () => 'E:\\影片\\詞庫.txt',
@@ -279,6 +288,85 @@
     $('txModelsLink').onclick = () => showView('models');
   }
 
+  // ---------- 關於與更新 ----------
+  async function checkUpdate(force) {
+    let r;
+    try { r = await tx.check_update(!!force); } catch (e) { return null; }
+    const b = $('updateBanner');
+    if (r && r.newer) {
+      b.innerHTML = '';
+      b.append(`有新版本 v${r.latest}`, Object.assign(document.createElement('small'), { textContent: r.asset_name ? '點這裡下載' : '點這裡前往下載頁' }));
+      b.onclick = () => tx.open_url(r.asset_url || r.url);
+      b.classList.remove('hidden');
+    } else b.classList.add('hidden');
+    return r;
+  }
+
+  function closePanel() { $('modalBack').classList.add('hidden'); document.removeEventListener('keydown', panelKey, true); }
+  function panelKey(e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePanel(); } }
+
+  async function showAbout() {
+    let a;
+    try { a = await tx.about_info(); } catch (e) { a = null; }
+    if (!a) { toast('讀不到程式資訊'); return; }
+    const modal = $('modal'), back = $('modalBack');
+    modal.innerHTML = '';
+    modal.setAttribute('aria-modal', 'true');
+    const h = Object.assign(document.createElement('h2'), { textContent: '關於 AutoSubtitle 字幕工房' });
+    const grid = Object.assign(document.createElement('div'), { className: 'about-grid' });
+    const row = (k, v, btnLabel, fn, wrap) => {
+      grid.append(Object.assign(document.createElement('span'), { className: 'k', textContent: k }));
+      const vv = Object.assign(document.createElement('span'), { className: 'v' + (wrap ? ' wrap' : ''), textContent: v, title: v });
+      grid.append(vv);
+      if (btnLabel) {
+        const b = Object.assign(document.createElement('button'), { className: 'btn sm', textContent: btnLabel });
+        b.onclick = fn; grid.append(b);
+      } else grid.append(document.createElement('span'));
+      return vv;
+    };
+    const sep = () => grid.append(Object.assign(document.createElement('div'), { className: 'about-sep' }));
+    row('版本', `${a.dev ? '開發版 ' : 'v'}${a.version}（${a.flavor}${a.frozen ? '' : '，原始碼執行'}）`);
+    row('系統', `${a.platform} · Python ${a.python}`);
+    row('運算', st.compute ? (st.compute.gpu_ok ? st.compute.gpu_label : st.compute.cpu_label) : '—');
+    sep();
+    row('逐字稿', a.output_dir, '開啟', () => tx.open_folder(st.outdir || a.output_dir));
+    row('模型', a.models_dir, '開啟', () => tx.open_models_folder());
+    row('資料', a.data_dir, '開啟', () => tx.open_folder(a.data_dir));
+    row('紀錄檔', a.log_dir, '開啟', () => tx.open_logs_folder());
+    sep();
+    const upd = row('更新', a.dev ? '開發版不比對版本' : '尚未檢查', '檢查更新', async e => {
+      const btn = e.target; btn.disabled = true; upd.textContent = '檢查中…';
+      const r = await checkUpdate(true);
+      btn.disabled = false;
+      if (!r) upd.textContent = '檢查失敗';
+      else if (r.error) upd.textContent = r.error;
+      else if (r.newer) upd.textContent = `有新版本 v${r.latest}，點側欄的提示下載`;
+      else upd.textContent = r.latest ? `已是最新（最新版 v${r.latest}）` : '已是最新';
+    }, true);
+    grid.append(document.createElement('span'));
+    const chk = Object.assign(document.createElement('label'), { className: 'about-check' });
+    const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!(a.settings && a.settings.check_updates) });
+    cb.onchange = async () => { const r = await tx.set_setting('check_updates', cb.checked); if (r && r.error) toast(r.error); };
+    chk.append(cb, '啟動時自動檢查（每天最多一次，只連線到 GitHub）');
+    grid.append(chk, document.createElement('span'));
+    sep();
+    row('授權', 'MIT License · 使用的開源元件與授權', '查看', () => tx.open_notices());
+    row('回報問題', '複製版本與最近的紀錄，貼到 GitHub', '複製並前往', async () => {
+      const text = await tx.diagnostics();
+      const ok = await copyText(text);
+      toast(ok ? '已複製診斷資訊，請貼到回報內容裡' : '複製失敗，請到「紀錄檔」資料夾附上 autosubtitle.log');
+      tx.open_url('https://github.com/alextixu/AutoSubtitle/issues/new');
+    });
+    const actions = Object.assign(document.createElement('div'), { className: 'actions' });
+    const close = Object.assign(document.createElement('button'), { className: 'btn primary', textContent: '關閉' });
+    close.onclick = closePanel;
+    actions.append(close);
+    modal.append(h, grid, actions);
+    back.classList.remove('hidden');
+    document.addEventListener('keydown', panelKey, true);
+    close.focus();
+  }
+
   // ---------- 逐字稿轉檔 ----------
   const basename = p => (p || '').split(/[\\/]/).pop();
 
@@ -493,6 +581,8 @@
     bindTranscribe(info);
     bindModels();
     refreshModels();
+    $('aboutBtn').onclick = showAbout;
+    setTimeout(() => checkUpdate(false), 3000);   // 每天最多一次，可在「關於」關閉
     $('appVersion').textContent = info.version && info.version !== '0.0.0-dev' ? `v${info.version}` : (info.version ? '開發版' : '');
     st.compute = info.compute || null;
     $('txDevice').addEventListener('change', renderDevice);

@@ -23,7 +23,7 @@ APP_DIR = Path(__file__).parent
 sys.path.insert(0, str(APP_DIR))
 
 from app import Api as EditorApi                                            # noqa: E402
-from engine import exporter, models, transcriber                           # noqa: E402
+from engine import appinfo, exporter, models, transcriber                  # noqa: E402
 from engine.paths import DATA_DIR, FROZEN, OUTPUT_DIR, ui_file             # noqa: E402
 from engine._version import __version__                                  # noqa: E402
 from transcribe import fmt_clock, output_stem, parse_time, write_outputs   # noqa: E402
@@ -442,6 +442,64 @@ class Api(EditorApi):
     def open_models_folder(self):
         return self.open_folder(str(models.root()))
 
+    # ----- 關於、更新、設定 -----
+    def about_info(self):
+        bundle = Path(getattr(sys, '_MEIPASS', APP_DIR))
+        notices = bundle / 'THIRD_PARTY_NOTICES.txt'
+        import platform
+        return {'version': __version__, 'dev': appinfo.is_dev_build(), 'flavor': appinfo.build_flavor(),
+                'platform': f'{platform.system()} {platform.release()} ({platform.machine()})',
+                'python': platform.python_version(), 'frozen': FROZEN,
+                'data_dir': str(DATA_DIR), 'models_dir': str(models.root()),
+                'log_dir': str(appinfo.LOG_DIR), 'output_dir': str(OUTPUT_DIR),
+                'settings': appinfo.load_settings(),
+                'notices': str(notices) if notices.exists() else None,
+                'releases_url': appinfo.RELEASES_URL}
+
+    def check_update(self, force: bool = False):
+        return appinfo.check_update(force=bool(force))
+
+    def set_setting(self, key: str, value):
+        try:
+            return {'ok': True, 'settings': appinfo.save_setting(key, value)}
+        except (ValueError, OSError) as e:
+            return {'error': str(e)}
+
+    _URL_OK = ('https://github.com/alextixu/AutoSubtitle', 'https://go.microsoft.com/fwlink/',
+               'https://huggingface.co/')
+
+    def open_url(self, url: str):
+        """只開白名單內的網址（更新下載頁、回報問題、WebView2 下載）"""
+        if not any(str(url).startswith(p) for p in self._URL_OK):
+            return {'error': '不允許的網址'}
+        import webbrowser
+        webbrowser.open(url)
+        return {'ok': True}
+
+    def open_logs_folder(self):
+        return self.open_folder(str(appinfo.LOG_DIR))
+
+    def open_notices(self):
+        info = self.about_info()
+        if not info['notices']:
+            return self.open_url('https://github.com/alextixu/AutoSubtitle/blob/main/packaging/NOTICES_EXTRA.txt')
+        p = info['notices']
+        if sys.platform == 'win32':
+            os.startfile(p)  # noqa: S606
+        else:
+            subprocess.Popen(['open' if sys.platform == 'darwin' else 'xdg-open', p])
+        return {'ok': True}
+
+    def diagnostics(self):
+        """回報問題用：版本、平台、運算、最後幾十行紀錄（不含影片內容）"""
+        info = self.about_info()
+        c = transcriber.compute_info()
+        lines = [f'AutoSubtitle {info["version"]} ({info["flavor"]}{", 打包版" if info["frozen"] else ", 原始碼"})',
+                 f'系統：{info["platform"]}，Python {info["python"]}',
+                 f'運算：GPU {"可用" if c.get("gpu_ok") else "不可用"} {c.get("gpu_name") or ""} {c.get("reason") or ""}'.strip(),
+                 '', '--- 最近的紀錄 ---', appinfo.tail_log(60)]
+        return '\n'.join(lines)
+
 
 def _fallback_error(msg: str):
     """沒裝 pywebview 時用內建 tkinter 顯示安裝提示（pythonw 啟動時看不到主控台）"""
@@ -554,27 +612,31 @@ def _hard_exit(code: int = 0):
     os._exit(code)
 
 
-def _quiet_streams():
-    """打包成視窗程式後沒有主控台，sys.stdout/stderr 會是 None。
-    模型下載的進度條寫到 None 會當掉，所以改寫進使用者資料夾的 log。"""
-    if sys.stdout is not None and sys.stderr is not None:
+def _check_webview2():
+    """Windows 沒有 WebView2 Runtime 時，視窗會是空白或直接失敗；先提醒並提供下載頁"""
+    if appinfo.webview2_installed() is not False:
         return
+    appinfo.write_log('找不到 WebView2 Runtime')
     try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        log = open(DATA_DIR / 'autosubtitle.log', 'a', encoding='utf-8', buffering=1)  # noqa: SIM115
-    except OSError:
-        log = open(os.devnull, 'w', encoding='utf-8')  # noqa: SIM115
-    if sys.stdout is None:
-        sys.stdout = log
-    if sys.stderr is None:
-        sys.stderr = log
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        go = messagebox.askyesno(APP_NAME, '這台電腦沒有安裝 Microsoft Edge WebView2 Runtime，'
+                                 'AutoSubtitle 的介面需要它。\n\n要開啟下載頁嗎？（免費，約 2 MB）')
+        root.destroy()
+        if go:
+            import webbrowser
+            webbrowser.open('https://go.microsoft.com/fwlink/p/?LinkId=2124703')
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def main(default_view: str = 'transcribe'):
     if '--version' in sys.argv:
         print(f'{APP_NAME} {__version__}')
         return
-    _quiet_streams()
+    appinfo.setup_logging()
     if '--uitest' in sys.argv:
         _hard_exit(uitest(sys.argv[sys.argv.index('--uitest') + 1]))
     if '--selftest' in sys.argv:
@@ -606,6 +668,7 @@ def main(default_view: str = 'transcribe'):
         return bool(ok)
 
     win.events.closing += on_closing
+    _check_webview2()
     webview.start(debug='--debug' in sys.argv)
     if FROZEN:
         _hard_exit(0)
