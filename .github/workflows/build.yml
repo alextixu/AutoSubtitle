@@ -117,7 +117,7 @@ jobs:
           if (!(Test-Path (Join-Path $dir 'THIRD_PARTY_NOTICES.txt'))) { throw 'notices not installed' }
           $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'AutoSubtitle 字幕工房.lnk'
           "start menu shortcut: $(Test-Path $lnk)"
-          $p = Start-Process $exe -ArgumentList '--selftest', "$PWD	est_audio.wav", "$PWD\installed-selftest.json" -PassThru -Wait
+          $p = Start-Process $exe -ArgumentList '--selftest', (Join-Path $PWD 'test_audio.wav'), (Join-Path $PWD 'installed-selftest.json') -PassThru -Wait
           Get-Content installed-selftest.json -Encoding utf8
           if ($p.ExitCode -ne 0) { throw "installed selftest failed ($($p.ExitCode))" }
           $p = Start-Process (Join-Path $dir 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru -Wait
