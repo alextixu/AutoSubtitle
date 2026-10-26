@@ -37,12 +37,13 @@ No Python needed. Grab the file for your system from the **[Releases page](https
 
 | System | File |
 |---|---|
-| Windows 10/11 | `AutoSubtitle-<version>-Windows.zip` |
-| Windows + NVIDIA GPU | `AutoSubtitle-<version>-Windows-NVIDIA-GPU.zip`, which bundles the CUDA libraries. It is larger but much faster |
+| Windows 10/11 | `AutoSubtitle-<version>-Windows-Setup.exe` (installer, recommended) or `-Windows.zip` (portable) |
+| Windows + NVIDIA GPU | `AutoSubtitle-<version>-Windows-NVIDIA-GPU-Setup.exe` or `.zip`, which bundles the CUDA libraries. It is larger but much faster |
 | Mac (M1, M2, M3, M4…) | `AutoSubtitle-<version>-macOS-Apple-Silicon.dmg` |
 | Mac (Intel) | `AutoSubtitle-<version>-macOS-Intel.dmg` |
 
-- **Windows.** Extract the zip and open `AutoSubtitle.exe`. If SmartScreen appears, choose **More info**, then **Run anyway**.
+- **Windows.** Run `Setup.exe`. It needs no admin rights, adds a Start menu shortcut, and can be removed from **Settings → Apps**. For the portable zip, extract it and open `AutoSubtitle.exe`. If SmartScreen appears, choose **More info**, then **Run anyway**.
+- **Verify the download.** Each release includes `SHA256SUMS.txt`.
 - **macOS.** Open the dmg and drag AutoSubtitle into Applications. If macOS says it can't verify the developer, go to **System Settings → Privacy & Security** and choose **Open Anyway**.
 - The app isn't code-signed, so each system warns you once. After that it opens normally.
 - The first use of each model downloads it once, which needs internet. After that it works offline.

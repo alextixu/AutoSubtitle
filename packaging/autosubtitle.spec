@@ -20,6 +20,9 @@ IS_WIN = sys.platform == 'win32'
 GPU = IS_WIN and os.environ.get('AS_GPU') == '1'
 
 datas = [(os.path.join(ROOT, 'ui'), 'ui')]
+for _f in ('LICENSE', 'THIRD_PARTY_NOTICES.txt'):      # 授權文字隨程式散佈（CI 會先產生 NOTICES）
+    if os.path.exists(os.path.join(ROOT, _f)):
+        datas.append((os.path.join(ROOT, _f), '.'))
 datas += collect_data_files('faster_whisper')        # Silero VAD 模型（onnx）
 datas += collect_data_files('opencc')                # 簡繁轉換字典
 binaries = collect_dynamic_libs('ctranslate2') + collect_dynamic_libs('onnxruntime')

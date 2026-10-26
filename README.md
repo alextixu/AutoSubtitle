@@ -37,12 +37,13 @@
 
 | 系統 | 檔案 |
 |---|---|
-| Windows 10/11 | `AutoSubtitle-版本-Windows.zip` |
-| Windows＋NVIDIA 顯示卡 | `AutoSubtitle-版本-Windows-NVIDIA-GPU.zip`，內含 CUDA 函式庫，檔案較大，辨識快很多 |
+| Windows 10/11 | `AutoSubtitle-版本-Windows-Setup.exe`（安裝版，建議）或 `-Windows.zip`（免安裝） |
+| Windows＋NVIDIA 顯示卡 | `AutoSubtitle-版本-Windows-NVIDIA-GPU-Setup.exe` 或 `.zip`，內含 CUDA 函式庫，檔案較大，辨識快很多 |
 | Mac（M1、M2、M3、M4…） | `AutoSubtitle-版本-macOS-Apple-Silicon.dmg` |
 | Mac（Intel） | `AutoSubtitle-版本-macOS-Intel.dmg` |
 
-- **Windows**：解壓縮後打開 `AutoSubtitle.exe`。出現「Windows 已保護您的電腦」時，按「其他資訊」再按「仍要執行」。
+- **Windows**：執行 `Setup.exe`，不需要系統管理員權限，會建立開始功能表捷徑，也能從「設定 → 應用程式」解除安裝。免安裝版解壓縮後打開 `AutoSubtitle.exe`。出現「Windows 已保護您的電腦」時，按「其他資訊」再按「仍要執行」。
+- **驗證下載**：Release 附有 `SHA256SUMS.txt`。
 - **macOS**：打開 dmg，把 AutoSubtitle 拖進「應用程式」。第一次開啟若提示無法驗證開發者，到「系統設定 → 隱私權與安全性」按「強制打開」。
 - 程式沒有購買程式碼簽章，所以兩個系統都會跳一次提醒，之後就不會了。
 - 第一次用某個模型會下載模型檔，需要網路，之後可離線使用。

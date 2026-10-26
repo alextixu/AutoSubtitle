@@ -1,18 +1,24 @@
 ## 下載 Download
 
-| 系統 System | 檔案 File |
-|---|---|
-| Windows 10/11 | `AutoSubtitle-*-Windows.zip` |
-| Windows + NVIDIA 顯示卡 GPU | `AutoSubtitle-*-Windows-NVIDIA-GPU.zip`（內含 CUDA 函式庫，檔案較大 / bundles CUDA libraries, larger） |
-| Mac（M1、M2、M3、M4…） | `AutoSubtitle-*-macOS-Apple-Silicon.dmg` |
-| Mac（Intel） | `AutoSubtitle-*-macOS-Intel.dmg` |
+| 系統 System | 建議 Recommended | 免安裝 Portable |
+|---|---|---|
+| Windows 10/11 | `AutoSubtitle-*-Windows-Setup.exe` | `AutoSubtitle-*-Windows.zip` |
+| Windows + NVIDIA 顯示卡 GPU | `AutoSubtitle-*-Windows-NVIDIA-GPU-Setup.exe`（內含 CUDA 函式庫，檔案較大 / bundles CUDA, larger） | `AutoSubtitle-*-Windows-NVIDIA-GPU.zip` |
+| Mac（M1、M2、M3、M4…） | `AutoSubtitle-*-macOS-Apple-Silicon.dmg` | |
+| Mac（Intel） | `AutoSubtitle-*-macOS-Intel.dmg` | |
+
+`SHA256SUMS.txt` 可用來確認下載的檔案完整。Use `SHA256SUMS.txt` to verify your download.
 
 ### Windows
 
-1. 下載 zip 並解壓縮，打開資料夾裡的 `AutoSubtitle.exe`。
-   Download the zip, extract it, and open `AutoSubtitle.exe`.
-2. 第一次開啟若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。這是因為程式沒有購買程式碼簽章。
-   If SmartScreen appears, choose **More info → Run anyway**. The app is not code-signed.
+1. 執行 `Setup.exe`。不需要系統管理員權限，會裝到你自己的使用者資料夾，並建立開始功能表捷徑。
+   Run `Setup.exe`. No admin rights needed. It installs to your user folder and adds a Start menu shortcut.
+2. 第一次執行若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。這是因為程式還沒有程式碼簽章。
+   If SmartScreen appears, choose **More info → Run anyway**. The app is not code-signed yet.
+3. 解除安裝：「設定 → 應用程式」找到 AutoSubtitle。會問你要不要一併刪除模型與設定，逐字稿不會被刪。
+   Uninstall from **Settings → Apps**. It asks whether to delete models and settings; transcripts are kept.
+
+免安裝版：解壓 zip 後打開 `AutoSubtitle.exe`。Portable: extract the zip and open `AutoSubtitle.exe`.
 
 ### macOS
 
@@ -26,6 +32,6 @@
 
 ### 第一次使用 First run
 
-- 第一次用某個模型會先下載模型檔（small 約 484 MB），需要網路，之後可離線使用。
-  The first use of each model downloads it once (small is about 484 MB). After that it works offline.
-- 逐字稿預設存到「文件 / AutoSubtitle」。Transcripts are saved to **Documents/AutoSubtitle** by default.
+- 第一次用某個模型要先下載（「標準」約 486 MB），介面會先詢問並顯示進度，之後可離線使用。也可以在側欄「模型」頁預先下載。
+  Each model downloads once (the standard model is about 486 MB). The app asks first and shows progress. You can also pre-download from the **Models** page.
+- 逐字稿預設存到「文件 / AutoSubtitle」。Transcripts are saved to **Documents/AutoSubtitle**.

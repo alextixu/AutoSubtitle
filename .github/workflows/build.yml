@@ -50,6 +50,13 @@ jobs:
         run: |
           echo "__version__ = '${{ steps.v.outputs.version }}'" > engine/_version.py
           cat engine/_version.py
+      - name: Third-party notices
+        shell: bash
+        run: |
+          pip install pip-licenses
+          pip-licenses --from=mixed --with-urls --with-license-file --no-license-path --format=plain-vertical             --ignore-packages pyinstaller pyinstaller-hooks-contrib altgraph pefile pywin32-ctypes macholib               setuptools pip packaging pip-licenses prettytable wcwidth tomli             > THIRD_PARTY_NOTICES.txt
+          cat packaging/NOTICES_EXTRA.txt >> THIRD_PARTY_NOTICES.txt
+          wc -l THIRD_PARTY_NOTICES.txt
       - name: Build
         shell: bash
         env:
@@ -74,21 +81,58 @@ jobs:
         shell: pwsh
         run: |
           $name = "AutoSubtitle-${{ steps.v.outputs.version }}-${{ matrix.suffix }}.zip"
+          Copy-Item LICENSE, THIRD_PARTY_NOTICES.txt dist\AutoSubtitle
           Push-Location dist
           7z a -tzip -mx=7 "..\$name" AutoSubtitle | Out-Null
           Pop-Location
           "{0:N0} MB  {1}" -f ((Get-Item $name).Length/1MB), $name
+      - name: Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress | Out-Null
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $iscc)) { throw "ISCC not found at $iscc" }
+          try {
+            Invoke-WebRequest 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseTraditional.isl' -OutFile packaging\ChineseTraditional.isl
+          } catch { Write-Warning "zh-TW installer translation unavailable, English only: $_" }
+          $ver = '${{ steps.v.outputs.version }}'
+          $num = ($ver -split '[^0-9.]')[0]; if (($num -split '\.').Count -lt 3) { $num = '0.0.0' }
+          & $iscc /Qp "/DAppVersion=$ver" "/DAppNumVersion=$num" "/DSourceDir=$PWD\dist\AutoSubtitle" "/DOutDir=$PWD" "/DOutName=AutoSubtitle-$ver-${{ matrix.suffix }}-Setup" packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          Get-ChildItem AutoSubtitle-*-Setup.exe | ForEach-Object { "{0:N0} MB  {1}" -f ($_.Length/1MB), $_.Name }
+      - name: Installer smoke test (silent install, self-test, uninstall)
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem AutoSubtitle-*-Setup.exe | Select-Object -First 1).FullName
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\AutoSubtitleCI'
+          $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=$dir" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "setup exit $($p.ExitCode)" }
+          $exe = Join-Path $dir 'AutoSubtitle.exe'
+          if (!(Test-Path $exe)) { throw 'AutoSubtitle.exe not installed' }
+          if (!(Test-Path (Join-Path $dir 'THIRD_PARTY_NOTICES.txt'))) { throw 'notices not installed' }
+          $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'AutoSubtitle 字幕工房.lnk'
+          "start menu shortcut: $(Test-Path $lnk)"
+          $p = Start-Process $exe -ArgumentList '--selftest', "$PWD	est_audio.wav", "$PWD\installed-selftest.json" -PassThru -Wait
+          Get-Content installed-selftest.json -Encoding utf8
+          if ($p.ExitCode -ne 0) { throw "installed selftest failed ($($p.ExitCode))" }
+          $p = Start-Process (Join-Path $dir 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru -Wait
+          Start-Sleep 3
+          if (Test-Path $exe) { throw 'uninstall left AutoSubtitle.exe behind' }
+          'install / selftest / uninstall OK'
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.suffix }}
-          path: AutoSubtitle-*.zip
+          path: |
+            AutoSubtitle-*.zip
+            AutoSubtitle-*-Setup.exe
           compression-level: 0
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: selftest-${{ matrix.suffix }}
-          path: '*test.json'
+          path: '*selftest.json'
 
   macos:
     name: macOS (${{ matrix.arch }})
@@ -122,6 +166,13 @@ jobs:
         run: |
           echo "__version__ = '${{ steps.v.outputs.version }}'" > engine/_version.py
           cat engine/_version.py
+      - name: Third-party notices
+        shell: bash
+        run: |
+          pip install pip-licenses
+          pip-licenses --from=mixed --with-urls --with-license-file --no-license-path --format=plain-vertical             --ignore-packages pyinstaller pyinstaller-hooks-contrib altgraph pefile pywin32-ctypes macholib               setuptools pip packaging pip-licenses prettytable wcwidth tomli             > THIRD_PARTY_NOTICES.txt
+          cat packaging/NOTICES_EXTRA.txt >> THIRD_PARTY_NOTICES.txt
+          wc -l THIRD_PARTY_NOTICES.txt
       - name: Build
         env:
           APP_VERSION: ${{ steps.v.outputs.version }}
@@ -156,6 +207,7 @@ jobs:
         run: |
           name="AutoSubtitle-${{ steps.v.outputs.version }}-${{ matrix.suffix }}.dmg"
           mkdir -p dmg && cp -R dist/AutoSubtitle.app dmg/ && ln -s /Applications dmg/Applications
+          cp LICENSE THIRD_PARTY_NOTICES.txt dmg/
           hdiutil create -volname "AutoSubtitle" -srcfolder dmg -ov -format UDZO "$name"
           ls -lh "$name"
       - uses: actions/upload-artifact@v4
@@ -184,12 +236,19 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - name: List files
-        run: ls -lh artifacts
+      - name: Checksums
+        working-directory: artifacts
+        run: |
+          rm -f *.json *.png *.log 2>/dev/null || true
+          sha256sum AutoSubtitle-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          ls -lh
       - uses: softprops/action-gh-release@v2
         with:
           name: AutoSubtitle ${{ github.ref_name }}
           body_path: packaging/RELEASE_NOTES.md
           files: |
+            artifacts/*.exe
             artifacts/*.zip
             artifacts/*.dmg
+            artifacts/SHA256SUMS.txt

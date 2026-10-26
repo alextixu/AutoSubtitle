@@ -1,0 +1,44 @@
+
+==============================================================================
+Additional third-party components bundled with AutoSubtitle
+（以下為 pip 套件清單之外、隨程式一起散佈的元件）
+==============================================================================
+
+FFmpeg libraries (avcodec, avformat, avutil, avfilter, swresample, swscale and
+codec libraries such as dav1d, libvpx, libopus, libmp3lame, libwebp, SVT-AV1,
+opencore-amr)
+  Bundled inside the PyAV binary wheel. Licensed under the GNU Lesser General
+  Public License (LGPL) v2.1 or later / v3, depending on the component.
+  AutoSubtitle links to them dynamically and does not modify them.
+  Build configuration and sources:
+    https://github.com/PyAV-Org/pyav-ffmpeg
+    https://ffmpeg.org/download.html
+  LGPL text: https://www.gnu.org/licenses/lgpl-3.0.html
+
+CTranslate2 (MIT) with Intel oneMKL and the Intel OpenMP runtime (libiomp5md.dll)
+  https://github.com/OpenNMT/CTranslate2
+  Intel components are redistributed under the Intel Simplified Software License:
+    https://www.intel.com/content/www/us/en/developer/articles/license/onemkl-license-faq.html
+
+NVIDIA cuBLAS and cuDNN (Windows NVIDIA GPU build only)
+  Redistributed under the NVIDIA Software License Agreement for the CUDA
+  Toolkit and the cuDNN Software License Agreement, as permitted for
+  redistribution with applications.
+    https://docs.nvidia.com/cuda/eula/
+    https://docs.nvidia.com/deeplearning/cudnn/latest/reference/eula.html
+
+Silero VAD model (MIT) — bundled with faster-whisper
+  https://github.com/snakers4/silero-vad
+
+OpenCC dictionaries (Apache License 2.0) — bundled with opencc-python-reimplemented
+  https://github.com/BYVoid/OpenCC
+
+Whisper speech models (downloaded on first use, not bundled)
+  OpenAI Whisper weights (MIT): https://github.com/openai/whisper
+  CTranslate2 conversions by Systran (MIT): https://huggingface.co/Systran
+  large-v3-turbo conversion by Mobius Labs (MIT):
+    https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo
+
+Python (PSF License) — https://docs.python.org/3/license.html
+Microsoft Edge WebView2 Runtime (Windows) and WebKit (macOS) are provided by the
+operating system and are not redistributed.
