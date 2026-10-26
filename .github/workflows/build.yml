@@ -92,9 +92,13 @@ jobs:
           choco install innosetup -y --no-progress | Out-Null
           $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
           if (!(Test-Path $iscc)) { throw "ISCC not found at $iscc" }
-          try {
-            Invoke-WebRequest 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseTraditional.isl' -OutFile packaging\ChineseTraditional.isl
-          } catch { Write-Warning "zh-TW installer translation unavailable, English only: $_" }
+          $zh = Join-Path (Split-Path $iscc) 'Languages\ChineseTraditional.isl'
+          if (Test-Path $zh) { 'zh-TW installer translation: built in' } else {
+            try {
+              Invoke-WebRequest 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseTraditional.isl' -OutFile packaging\ChineseTraditional.isl
+              'zh-TW installer translation: downloaded'
+            } catch { Write-Warning "zh-TW installer translation unavailable, English only: $_" }
+          }
           $ver = '${{ steps.v.outputs.version }}'
           $num = ($ver -split '[^0-9.]')[0]; if (($num -split '\.').Count -lt 3) { $num = '0.0.0' }
           & $iscc /Qp "/DAppVersion=$ver" "/DAppNumVersion=$num" "/DSourceDir=$PWD\dist\AutoSubtitle" "/DOutDir=$PWD" "/DOutName=AutoSubtitle-$ver-${{ matrix.suffix }}-Setup" packaging\installer.iss

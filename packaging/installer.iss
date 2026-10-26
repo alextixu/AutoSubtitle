@@ -53,20 +53,30 @@ VersionInfoProductName=AutoSubtitle
 VersionInfoProductTextVersion={#AppVersion}
 VersionInfoCompany=郭家齊
 
+; 繁體中文翻譯：Inno Setup 6.4 起是官方內建語言（compiler:Languages\ChineseTraditional.isl）；
+; 舊版編譯器沒有時，退回只有英文，不讓建置失敗。
+#if FileExists(AddBackslash(CompilerPath) + "Languages\ChineseTraditional.isl")
+  #define ZhTw "compiler:Languages\ChineseTraditional.isl"
+#elif FileExists(AddBackslash(SourcePath) + "ChineseTraditional.isl")
+  #define ZhTw "ChineseTraditional.isl"
+#endif
+
 [Languages]
-#ifexist "ChineseTraditional.isl"
-Name: "zh_tw"; MessagesFile: "ChineseTraditional.isl"
+#ifdef ZhTw
+Name: "zh_tw"; MessagesFile: "{#ZhTw}"
 #endif
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [CustomMessages]
+#ifdef ZhTw
 zh_tw.DesktopIcon=建立桌面捷徑
-en.DesktopIcon=Create a desktop shortcut
 zh_tw.LaunchApp=啟動 AutoSubtitle 字幕工房
-en.LaunchApp=Launch AutoSubtitle
 zh_tw.NoWebView2=這台電腦沒有安裝 Microsoft Edge WebView2 Runtime，AutoSubtitle 的介面需要它。%n%n安裝完成後請先安裝 WebView2（免費，約 2 MB 的安裝程式）。%n要現在開啟下載頁嗎？
-en.NoWebView2=Microsoft Edge WebView2 Runtime is not installed. AutoSubtitle needs it to show its window.%n%nPlease install WebView2 (free, a 2 MB installer).%nOpen the download page now?
 zh_tw.AskDeleteData=要一併刪除下載的模型、專案、詞庫與設定嗎？%n%n位置：%1%n%n你的逐字稿輸出（文件\AutoSubtitle）不會被刪除。
+#endif
+en.DesktopIcon=Create a desktop shortcut
+en.LaunchApp=Launch AutoSubtitle
+en.NoWebView2=Microsoft Edge WebView2 Runtime is not installed. AutoSubtitle needs it to show its window.%n%nPlease install WebView2 (free, a 2 MB installer).%nOpen the download page now?
 en.AskDeleteData=Also delete downloaded models, projects, glossary and settings?%n%nLocation: %1%n%nYour transcripts in Documents\AutoSubtitle are kept.
 
 [Tasks]
