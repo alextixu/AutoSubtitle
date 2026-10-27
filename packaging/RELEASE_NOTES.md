@@ -1,3 +1,18 @@
+## 本版更新 What's new
+
+- **模型管理頁**：下載進度、速度、剩餘時間，可取消、可續傳、可刪除；第一次用模型會先詢問。
+  **Models page**: download progress, speed and ETA, cancel, resume and delete; the app asks before the first download.
+- **轉檔進度分四階段**：下載、讀取音訊、載入模型、辨識，每個階段都能取消，並顯示剩餘時間。
+  **Four-stage progress** (download, read audio, load model, transcribe), cancellable at every stage, with ETA.
+- **Windows 安裝程式**：不需管理員權限、開始功能表捷徑、可從設定解除安裝。
+  **Windows installer**: no admin rights, Start menu shortcut, uninstall from Settings.
+- **更新檢查與關於頁**、紀錄檔、第三方授權清單、SHA256 校驗檔。
+  **Update check and About panel**, log files, third-party notices, SHA256 checksums.
+- 辨識引擎：詞庫改用 hotwords（長詞庫不再失效）、新增 large-v3-turbo 模型。
+  Engine: glossary now uses hotwords (long glossaries no longer drop out), added large-v3-turbo.
+- 修正：改字後立刻點別句會遺失輸入、搜尋狀態下 Tab 鎖死快捷鍵、轉檔頁誤觸編輯器快捷鍵。
+  Fixes: lost edits when clicking another line right after editing, Tab locking hotkeys while filtering, editor hotkeys firing on the transcript page.
+
 ## 下載 Download
 
 | 系統 System | 建議 Recommended | 免安裝 Portable |
