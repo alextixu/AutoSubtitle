@@ -67,13 +67,19 @@ def _ass_color(hexcolor: str, alpha: int = 0) -> str:
 
 
 def to_ass(cues, style: dict | None = None, play_w: int = 1920, play_h: int = 1080) -> str:
-    """帶樣式的 ASS。style 鍵：font,size,color,outline_color,outline,pos_y(0~1),karaoke(bool)"""
+    """帶樣式的 ASS。style 鍵：font,size,color,outline_color,outline,pos_x/pos_y(0~1),karaoke(bool)
+    位置用 \\an5\\pos：字幕中心點落在畫面 (pos_x, pos_y)，與編輯器預覽的拖曳位置一致。
+    字級以 1080 高為基準，依實際解析度等比縮放。"""
     cues = normalize(cues)
     st = {'font': 'Noto Sans TC', 'size': 64, 'color': '#FFFFFF',
           'outline_color': '#000000', 'outline': 3, 'pos_y': 0.86,
           'karaoke': False, 'karaoke_color': '#39FF14'}
     st.update(style or {})
     margin_v = int(play_h * (1 - float(st['pos_y'])))
+    scale = play_h / 1080
+    size = max(8, round(float(st['size']) * scale))
+    outline = round(float(st['outline']) * scale, 1)
+    pos = f"{{\\an5\\pos({round(float(st.get('pos_x', 0.5)) * play_w)},{round(float(st['pos_y']) * play_h)})}}"
     head = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {play_w}
@@ -82,7 +88,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{st['font']},{st['size']},{_ass_color(st['color'])},{_ass_color(st['karaoke_color'])},{_ass_color(st['outline_color'])},&H64000000,0,0,0,0,100,100,0,0,1,{st['outline']},0,2,60,60,{margin_v},1
+Style: Default,{st['font']},{size},{_ass_color(st['color'])},{_ass_color(st['karaoke_color'])},{_ass_color(st['outline_color'])},&H64000000,0,0,0,0,100,100,0,0,1,{outline},0,2,60,60,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -101,6 +107,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             text = ''.join(parts)
         else:
             text = c['text']
+        text = pos + text.replace('\n', '\\N')
         lines.append(f"Dialogue: 0,{fmt_ass_time(c['start'])},{fmt_ass_time(c['end'])},Default,,0,0,0,,{text}")
     return head + '\n'.join(lines) + '\n'
 
@@ -108,10 +115,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 WRITERS = {'srt': to_srt, 'vtt': to_vtt, 'txt': to_txt}
 
 
-def export_file(cues, fmt: str, out_path: str, style: dict | None = None) -> str:
+def export_file(cues, fmt: str, out_path: str, style: dict | None = None,
+                size: tuple[int, int] | None = None) -> str:
     p = Path(out_path)
     if fmt == 'ass':
-        content = to_ass(cues, style)
+        w, h = size or (1920, 1080)
+        content = to_ass(cues, style, play_w=w, play_h=h)
     else:
         content = WRITERS[fmt](cues)
     p.write_text(content, encoding='utf-8')

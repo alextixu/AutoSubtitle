@@ -266,6 +266,16 @@ input[type=range]{accent-color:var(--accent);height:4px}
 /* ===== 波形區 ===== */
 .wave-wrap{position:relative;background:var(--wave-bg);flex:0 0 132px}
 #wave{width:100%;height:132px;display:block;cursor:crosshair}
+.zoom-ctl{position:absolute;left:10px;top:6px;display:flex;align-items:center;gap:4px;
+  background:color-mix(in srgb,var(--surface) 80%,transparent);border-radius:999px;padding:2px 4px;box-shadow:var(--shadow-sm)}
+.zbtn{appearance:none;border:0;background:transparent;color:var(--ink);font:600 13px var(--font);width:24px;height:22px;border-radius:999px;cursor:pointer}
+.zbtn.wide{width:auto;padding:0 8px;font-weight:500;font-size:12px}
+.zbtn:hover{background:var(--surface-3)}
+.zoom-label{font-size:12px;color:var(--ink-2);min-width:42px;text-align:center;font-variant-numeric:tabular-nums}
+.multi-bar{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;margin-bottom:6px;
+  background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-sm);font-size:13px}
+.multi-bar .mb-group{display:flex;align-items:center;gap:6px;color:var(--ink-2)}
+.multi-bar input{width:84px}
 .wave-hint{position:absolute;right:12px;top:8px;color:var(--ink-2);font-size:12px;pointer-events:none;opacity:.8}
 
 /* ===== 主分割 ===== */

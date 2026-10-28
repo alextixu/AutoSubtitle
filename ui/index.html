@@ -165,6 +165,7 @@
               <button data-t="log">紀錄</button>
             </div>
             <div class="card-tools">
+              <button id="txToEditor" class="btn sm primary" disabled title="把這次的結果建成專案，在字幕編輯器裡逐句修改、上樣式、匯出">用字幕編輯器打開</button>
               <button id="txCopy" class="btn sm" disabled>複製全文</button>
               <button id="txOpenOut" class="btn sm">開啟輸出資料夾</button>
             </div>
@@ -238,6 +239,7 @@
             <button id="btnUndo" class="btn sm icon" title="復原（Ctrl+Z）" disabled>↶</button>
             <button id="btnRedo" class="btn sm icon" title="重做（Ctrl+Shift+Z）" disabled>↷</button>
             <button id="btnIssues" class="btn sm" title="只顯示太快、太短、太長、重疊或沒有文字的句子">問題句</button>
+            <button id="btnImport" class="btn sm" title="匯入既有的 SRT／VTT 字幕檔">匯入字幕</button>
             <span id="saveStatus" class="save-status"></span>
           </div>
           <div class="tb-group search">
@@ -257,6 +259,12 @@
         <div class="wave-wrap">
           <canvas id="wave"></canvas>
           <div id="waveHint" class="wave-hint"></div>
+          <div class="zoom-ctl">
+            <button id="zoomOut" class="zbtn" title="縮小（-）">－</button>
+            <span id="zoomLabel" class="zoom-label">全部</span>
+            <button id="zoomIn" class="zbtn" title="放大（+）；也可以在波形上用滾輪">＋</button>
+            <button id="zoomFit" class="zbtn wide" title="顯示整段（0）">全部</button>
+          </div>
         </div>
 
         <div class="main-split">
@@ -326,6 +334,13 @@
 
           <!-- 編輯區：字幕列表 -->
           <div class="cue-pane">
+            <div id="multiBar" class="multi-bar hidden">
+              <b id="multiCount">已選 0 句</b>
+              <span class="mb-group">位移 <input id="multiMs" class="field sm" placeholder="±毫秒" inputmode="numeric"> <button id="multiShift" class="btn sm">套用</button></span>
+              <button id="multiMerge" class="btn sm">合併</button>
+              <button id="multiDelete" class="btn sm ghost danger">刪除</button>
+              <button id="multiClear" class="btn sm ghost">取消選取</button>
+            </div>
             <div id="cueList" class="cue-list"></div>
           </div>
         </div>

@@ -90,7 +90,10 @@ const state = {
   style: { font: 'Microsoft JhengHei', size: 64, color: '#ffffff', outline: 3, outline_color: '#000000', karaoke: false, karaoke_color: '#39ff14', pos_x: 0.5, pos_y: 0.82 },
   waveform: null, duration: 0, activeCue: -1, selected: -1, editing: -1, search: '', onlyIssues: false,
   follow: true, loopCue: false, scrub: false, userScrolledAt: 0,
+  view: { t0: 0, span: 0 },        // 時間軸目前顯示的範圍（秒）；span=0 代表整段
+  multi: new Set(),                // 多選的字幕 id
 };
+let nextCueId = 1;
 const video = $('video');
 const MIN_DUR = 0.05;
 const round3 = x => Math.round(x * 1000) / 1000;
@@ -136,7 +139,7 @@ function normalizeCues(cues) {
     if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
     if (start < 0) start = 0;
     if (end < start + MIN_DUR) end = start + MIN_DUR;
-    out.push({ start: round3(start), end: round3(end), text: String(c.text ?? ''), words: Array.isArray(c.words) ? c.words : [] });
+    out.push({ id: c.id || nextCueId++, start: round3(start), end: round3(end), text: String(c.text ?? ''), words: Array.isArray(c.words) ? c.words : [] });
   }
   out.sort((a, b) => a.start - b.start || a.end - b.end);
   return out;
@@ -313,6 +316,7 @@ async function openProject(name) {
   state.marks = [];
   state.style = Object.assign(state.style, d.style || {});
   state.activeCue = state.selected = state.editing = -1;
+  state.multi.clear(); state.view = { t0: 0, span: 0 };
   state.search = ''; $('searchBox').value = ''; state.onlyIssues = false;
   history.past.length = history.future.length = 0;
   $('projTitle').textContent = name;
@@ -321,7 +325,7 @@ async function openProject(name) {
   video.src = d.media_url || '';
   video.playbackRate = +$('speedSel').value || 1;
   state.waveform = null; state.duration = 0; peaksCache.key = null;
-  api.get_waveform(name).then(wf => { state.waveform = wf; state.duration = wf.duration || 0; peaksCache.key = null; markWaveDirty(); updateSeekMax(); });
+  api.get_waveform(name).then(wf => { state.waveform = wf; state.duration = wf.duration || 0; peaksCache.key = null; markWaveDirty(); updateSeekMax(); updateZoomLabel(); });
   syncStylePanel();
   renderCues(); markWaveDirty(); updateUndoButtons();
   save.status('saved');
@@ -385,6 +389,7 @@ async function cancelTranscribe() {
   $('btnCancelJob').disabled = false;
 }
 window.__asEditorBusy = () => !!jobPoll;
+window.__asOpenProject = name => openProject(name);
 
 function friendlyError(msg) {
   const m = String(msg || '未知錯誤');
@@ -437,7 +442,7 @@ function buildRow(i) {
   const c = state.cues[i];
   const info = cueInfo(i);
   const row = document.createElement('div');
-  row.className = 'cue-row' + (i === state.activeCue ? ' active' : '') + (i === state.selected ? ' selected' : '') + (info.issues.length ? ' warn' : '');
+  row.className = 'cue-row' + (i === state.activeCue ? ' active' : '') + (i === state.selected || state.multi.has(c.id) ? ' selected' : '') + (info.issues.length ? ' warn' : '');
   row.dataset.i = i;
   row.tabIndex = -1;
   const time = document.createElement('div');
@@ -468,6 +473,8 @@ function buildRow(i) {
     else if (a === 'edit') editCue(i);
     else if (a === 'ins') insertAfter(i);
     else if (e.target.closest('.cue-time') && !e.target.closest('.cue-meta')) editTime(i);
+    else if (e.shiftKey) { selectRange(i); }
+    else if (e.ctrlKey || e.metaKey) { toggleMulti(i); }
     else { selectCue(i); video.currentTime = c.start + 0.01; }
   };
   row.ondblclick = e => { if (!e.target.dataset?.a && !e.target.closest('.cue-time')) editCue(i); };
@@ -491,10 +498,12 @@ function updateIssueButton() {
   b.disabled = !n && !state.onlyIssues;
 }
 
-function selectCue(i, scroll = false) {
+function selectCue(i, scroll = false, keepMulti = false) {
+  if (!keepMulti && state.multi.size) { state.multi.clear(); renderMultiBar(); rows.forEach(r => r.classList.remove('selected')); }
   const prev = rows.get(state.selected);
   if (prev) prev.classList.remove('selected');
   state.selected = i;
+  markWaveDirty();
   const row = rows.get(i);
   if (row) { row.classList.add('selected'); if (scroll) row.scrollIntoView({ block: 'nearest' }); }
 }
@@ -537,7 +546,7 @@ function commitEdit() {
   const oldText = ta.dataset.old, newText = ta.value.trim();
   const changed = !!newText && newText !== oldText;
   if (changed) {
-    commit('修改文字', () => { state.cues[i].text = newText; state.cues[i].words = remapWords(state.cues[i], newText); });
+    commit('修改文字', () => { const c = state.cues[i]; c.words = alignWords(c, oldText, newText); c.text = newText; });
     api.learn_from_edit(oldText, newText).then(cands => {
       for (const w of cands) {
         toast(`把「${w}」加入詞庫？下次辨識會優先採用`, [
@@ -582,7 +591,49 @@ function editTime(i) {
   for (const inp of [inS, inE]) inp.onkeydown = e => { if (e.key === 'Enter') apply(); else if (e.key === 'Escape') updateRow(i); };
 }
 
-// 文字改了之後，把詞級時間戳等比重新對映（維持卡拉OK可用）
+
+// 改字後保留詞級時間戳：用最長共同子序列對齊新舊文字，沒改到的字沿用原本的時間，
+// 新增的字在前後已知時間之間內插。中文以字為單位；英文再依空白組回單字。
+function alignWords(cue, oldText, newText) {
+  const oldWords = cue.words || [];
+  const newChars = [...newText.replace(/\s/g, '')];
+  if (!newChars.length) return [];
+  if (!oldWords.length) return remapWords(cue, newText);
+  const oc = [];   // 舊文字逐字的時間
+  for (const [w, ws, we] of oldWords) {
+    const chars = [...String(w).replace(/\s/g, '')];
+    chars.forEach((ch, k) => oc.push({ ch, s: ws + (we - ws) * k / chars.length, e: ws + (we - ws) * (k + 1) / chars.length }));
+  }
+  const n = oc.length, m = newChars.length;
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    dp[i][j] = oc[i].ch === newChars[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const times = new Array(m).fill(null);
+  for (let i = 0, j = 0; i < n && j < m;) {
+    if (oc[i].ch === newChars[j]) { times[j] = [oc[i].s, oc[i].e]; i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) i++; else j++;
+  }
+  // 內插沒有對到的字
+  for (let j = 0; j < m; j++) {
+    if (times[j]) continue;
+    let a = j; while (a < m && !times[a]) a++;
+    const left = j > 0 ? times[j - 1][1] : cue.start;
+    const right = a < m ? times[a][0] : cue.end;
+    const span = Math.max(0, right - left), cnt = a - j;
+    for (let k = 0; k < cnt; k++) times[j + k] = [left + span * k / cnt, left + span * (k + 1) / cnt];
+    j = a - 1;
+  }
+  const r3 = x => +Math.min(Math.max(x, cue.start), cue.end).toFixed(3);
+  if (isCjk(newText)) return newChars.map((ch, k) => [ch, r3(times[k][0]), r3(times[k][1])]);
+  const out = []; let k = 0;
+  for (const tok of newText.split(/\s+/).filter(Boolean)) {
+    const len = [...tok].length, s = times[k][0], e = times[k + len - 1][1];
+    out.push([tok, r3(s), r3(e)]); k += len;
+  }
+  return out;
+}
+
+// 沒有原始詞級時間時的退路：等比分配（維持卡拉OK可用）
 function remapWords(cue, newText) {
   const chars = [...newText.replace(/\s/g, '')];
   if (!chars.length) return [];
@@ -610,8 +661,10 @@ function splitCue(i, caret, fullText) {
   commit('斷句', () => {
     const first = { start: c.start, end: round3(tSplit), text: a, words: [] };
     const second = { start: round3(tSplit), end: c.end, text: b, words: [] };
-    first.words = remapWords(first, a);
-    second.words = remapWords(second, b);
+    const ws = c.words || [];
+    const w1 = ws.filter(w => w[2] <= tSplit + 1e-3), w2 = ws.filter(w => w[2] > tSplit + 1e-3);
+    first.words = w1.length ? alignWords({ ...first, words: w1 }, w1.map(w => w[0]).join(''), a) : remapWords(first, a);
+    second.words = w2.length ? alignWords({ ...second, words: w2 }, w2.map(w => w[0]).join(''), b) : remapWords(second, b);
     state.cues.splice(i, 1, first, second);
   });
   selectCue(i + 1, true);
@@ -659,13 +712,102 @@ function addCueAtPlayhead() {
   editCue(idx);
 }
 
+// ----- 多選與批次 -----
+function selectedIndices() {
+  const ids = new Set(state.multi);
+  if (!ids.size && state.selected >= 0 && state.cues[state.selected]) ids.add(state.cues[state.selected].id);
+  return state.cues.map((c, i) => (ids.has(c.id) ? i : -1)).filter(i => i >= 0);
+}
+function toggleMulti(i) {
+  const c = state.cues[i];
+  if (!state.multi.size && state.selected >= 0 && state.cues[state.selected]) state.multi.add(state.cues[state.selected].id);
+  if (state.multi.has(c.id)) state.multi.delete(c.id); else state.multi.add(c.id);
+  state.selected = i;
+  refreshSelection();
+}
+function selectRange(i) {
+  const anchor = state.selected >= 0 ? state.selected : i;
+  const [a, b] = anchor < i ? [anchor, i] : [i, anchor];
+  state.multi.clear();
+  const vis = new Set(visibleIndices());
+  for (let k = a; k <= b; k++) if (vis.has(k)) state.multi.add(state.cues[k].id);
+  refreshSelection();
+}
+function selectAll() {
+  state.multi = new Set(visibleIndices().map(i => state.cues[i].id));
+  refreshSelection();
+}
+function refreshSelection() {
+  rows.forEach((r, i) => r.classList.toggle('selected', i === state.selected || state.multi.has(state.cues[i].id)));
+  renderMultiBar(); markWaveDirty();
+}
+function renderMultiBar() {
+  const bar = $('multiBar');
+  const n = state.multi.size;
+  bar.classList.toggle('hidden', n < 2);
+  $('multiCount').textContent = `已選 ${n} 句`;
+}
+function shiftSelected(ms) {
+  const idx = selectedIndices();
+  if (!idx.length) { toast('先選取字幕（Shift／Ctrl＋點擊，或 Ctrl+A 全選）'); return; }
+  const dt = ms / 1000;
+  const minStart = Math.min(...idx.map(i => state.cues[i].start));
+  if (minStart + dt < 0) { toast('位移後會早於 0 秒'); return; }
+  const ids = new Set(idx.map(i => state.cues[i].id));
+  commit(`位移 ${idx.length} 句 ${ms > 0 ? '+' : ''}${ms} ms`, () => {
+    for (const c of state.cues) if (ids.has(c.id)) {
+      c.start += dt; c.end += dt;
+      c.words = (c.words || []).map(([w, s, e]) => [w, +(s + dt).toFixed(3), +(e + dt).toFixed(3)]);
+    }
+  });
+  state.multi = ids; refreshSelection();
+  toast(`已位移 ${idx.length} 句（${ms > 0 ? '+' : ''}${ms} ms）`, [{ label: '復原', fn: undo }], 'shift');
+}
+function deleteSelected() {
+  const idx = selectedIndices();
+  if (idx.length <= 1) { if (idx.length) deleteCue(idx[0]); return; }
+  const ids = new Set(idx.map(i => state.cues[i].id));
+  commit(`刪除 ${idx.length} 句`, () => { state.cues = state.cues.filter(c => !ids.has(c.id)); });
+  state.multi.clear(); renderMultiBar();
+  toast(`已刪除 ${idx.length} 句`, [{ label: '復原', fn: undo }]);
+}
+function mergeSelected() {
+  const idx = selectedIndices();
+  if (idx.length < 2) { toast('至少選兩句才能合併'); return; }
+  const first = idx[0], last = idx[idx.length - 1];
+  if (last - first + 1 !== idx.length) { toast('只能合併相鄰的句子'); return; }
+  commit(`合併 ${idx.length} 句`, () => {
+    const part = state.cues.slice(first, last + 1);
+    const cjk = part.some(c => isCjk(c.text));
+    const merged = { start: part[0].start, end: Math.max(...part.map(c => c.end)),
+      text: part.map(c => c.text.trim()).join(cjk ? '' : ' '), words: part.flatMap(c => c.words || []) };
+    state.cues.splice(first, part.length, merged);
+  });
+  state.multi.clear(); renderMultiBar(); selectCue(first, true);
+}
+
+// ----- 匯入既有字幕 -----
+async function importSubtitle() {
+  if (!api.import_subtitle) { toast('這個版本不支援匯入'); return; }
+  const r = await api.import_subtitle();
+  if (!r || r.cancelled) return;
+  if (r.error) { toast(r.error); return; }
+  let mode = 'replace';
+  if (state.cues.length) {
+    const ok = await confirmBox({ title: `匯入「${r.name}」`, text: `檔案裡有 ${r.cues.length} 句。要取代目前的 ${state.cues.length} 句字幕嗎？（可以復原）`, ok: '取代' });
+    if (!ok) return;
+  }
+  commit(`匯入字幕 ${r.name}`, () => { state.cues = r.cues.map(c => ({ ...c })); });
+  toast(`已匯入 ${r.cues.length} 句字幕`, [{ label: '復原', fn: undo }]);
+}
+
 function replaceAll() {
   const q = $('searchBox').value, r = $('replaceBox').value;
   if (!q) { toast('請先輸入要搜尋的文字'); return; }
   let n = 0;
   commit(`全部取代「${q}」`, () => {
     for (const c of state.cues) {
-      if (c.text.includes(q)) { c.text = c.text.split(q).join(r); c.words = remapWords(c, c.text); n++; }
+      if (c.text.includes(q)) { const nt = c.text.split(q).join(r); c.words = alignWords(c, c.text, nt); c.text = nt; n++; }
     }
     if (!n) return false;
   });
@@ -812,23 +954,50 @@ function readTheme() {
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', readTheme);
 function markWaveDirty() { waveDirty = true; }
 
-function t2x(t) { return t / (state.duration || 1) * wave.width; }
+// 時間軸 viewport：顯示 [t0, t0+span]；span=0 代表整段
+function viewSpan() { const d = state.duration || 1; return state.view.span > 0 ? Math.min(state.view.span, d) : d; }
+function viewT0() { const d = state.duration || 0, s = viewSpan(); return Math.min(Math.max(0, state.view.t0), Math.max(0, d - s)); }
+function t2x(t) { return (t - viewT0()) / viewSpan() * wave.width; }
 function x2t(x) {
-  const t = x / wave.width * (state.duration || 1);
+  const t = viewT0() + x / wave.width * viewSpan();
   return Math.min(Math.max(0, t), state.duration || 0);
+}
+function px2dt(px) { return px / wave.width * viewSpan(); }   // 螢幕像素換成秒（磁吸、命中門檻用）
+function setView(t0, span) {
+  const d = state.duration || 0;
+  if (!(span > 0) || span >= d) {             // 0 或超過整段：顯示全部
+    state.view = { t0: 0, span: 0 };
+    peaksCache.key = null; markWaveDirty(); updateZoomLabel();
+    return;
+  }
+  span = Math.max(span, 2);
+  state.view = { t0: Math.min(Math.max(0, t0), Math.max(0, d - span)), span: span >= d ? 0 : span };
+  peaksCache.key = null; markWaveDirty(); updateZoomLabel();
+}
+function zoomBy(factor, centerT) {
+  const span = viewSpan(), t0 = viewT0();
+  const c = centerT ?? (video.currentTime || t0 + span / 2);
+  const ns = span / factor;
+  setView(c - (c - t0) * (ns / span), ns);
+}
+function updateZoomLabel() {
+  const el = $('zoomLabel');
+  if (!el) return;
+  const d = state.duration || 0, s = viewSpan();
+  el.textContent = !d || s >= d ? '全部' : s >= 60 ? `${(s / 60).toFixed(s >= 600 ? 0 : 1)} 分` : `${s.toFixed(s >= 10 ? 0 : 1)} 秒`;
 }
 
 function snapTime(t) {
   const targets = [...state.scenes, ...state.marks];
   for (const c of state.cues) { targets.push(c.start, c.end); }
-  const thr = x2t(8);
+  const thr = px2dt(8);
   let best = t, bd = thr;
   for (const g of targets) { const d = Math.abs(g - t); if (d < bd) { bd = d; best = g; } }
   return best;
 }
 
 function drawPeaks(W, H) {
-  const key = `${W}x${H}:${state.waveform ? state.waveform.peaks?.length : 0}:${theme.bg}`;
+  const key = `${W}x${H}:${state.waveform ? state.waveform.peaks?.length : 0}:${theme.bg}:${viewT0().toFixed(3)}:${viewSpan().toFixed(3)}`;
   if (peaksCache.key === key) return;
   const cv = peaksCache.canvas;
   cv.width = W; cv.height = H;
@@ -839,12 +1008,25 @@ function drawPeaks(W, H) {
   const midY = H * 0.62, ampH = H * 0.34;
   if (wf?.peaks?.length) {
     c.fillStyle = theme.fg;
-    const n = wf.peaks.length;
+    const n = wf.peaks.length, rate = wf.rate || (n / (state.duration || 1));
+    const t0 = viewT0(), span = viewSpan();
     for (let x = 0; x < W; x++) {
-      const k = Math.floor(x / W * n);
-      const [mn, mx] = wf.peaks[k] || [0, 0];
+      const k0 = Math.floor((t0 + x / W * span) * rate), k1 = Math.max(k0 + 1, Math.floor((t0 + (x + 1) / W * span) * rate));
+      let mn = 0, mx = 0;
+      for (let k = k0; k < k1 && k < n; k++) { const p = wf.peaks[k]; if (p) { if (p[0] < mn) mn = p[0]; if (p[1] > mx) mx = p[1]; } }
       c.fillRect(x, midY + mn * ampH, 1, Math.max(1, (mx - mn) * ampH));
     }
+    // 時間刻度
+    const steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200];
+    const minPx = 90 * (window.devicePixelRatio || 1);
+    const step = steps.find(s => s / span * W >= minPx) || 1800;
+    c.fillStyle = theme.stroke; c.font = `${11 * (window.devicePixelRatio || 1)}px system-ui`; c.textBaseline = 'bottom';
+    for (let t = Math.ceil(t0 / step) * step; t <= t0 + span; t += step) {
+      const x = (t - t0) / span * W;
+      c.globalAlpha = 0.35; c.fillRect(x, H * 0.36, 1, H * 0.64); c.globalAlpha = 0.8;
+      c.fillText(fmtT(t, step < 1 ? 1 : 0).replace(/\.0$/, ''), x + 3, H - 2);
+    }
+    c.globalAlpha = 1;
   }
   peaksCache.key = key;
 }
@@ -856,7 +1038,8 @@ function drawLayer(W, H) {
   const top = 6, h = H * 0.28;
   state.cues.forEach((cue, i) => {
     const x = t2x(cue.start), w = Math.max(2, t2x(cue.end) - x);
-    c.fillStyle = i === state.selected ? theme.cueSel : theme.cue;
+    if (x > W || x + w < 0) return;
+    c.fillStyle = i === state.selected || state.multi.has(cue.id) ? theme.cueSel : theme.cue;
     c.fillRect(x, top, w, h);
     c.strokeStyle = theme.stroke;
     c.strokeRect(x + 0.5, top + 0.5, w - 1, h - 1);
@@ -996,11 +1179,20 @@ function setupWave() {
   wave.ondblclick = e => {
     const [x] = pos(e);
     const t = +x2t(x).toFixed(3);
-    const near = state.marks.findIndex(m => Math.abs(m - t) < x2t(6));
+    const near = state.marks.findIndex(m => Math.abs(m - t) < px2dt(6));
     if (near >= 0) state.marks.splice(near, 1); else state.marks.push(t);
     markWaveDirty();
   };
-  new ResizeObserver(() => { markWaveDirty(); drawWave(true); }).observe(wave);
+  wave.addEventListener('wheel', e => {
+    if (!state.duration) return;
+    e.preventDefault();
+    const [x] = pos(e);
+    if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      const d = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY);
+      setView(viewT0() + d / wave.clientWidth * viewSpan(), viewSpan());
+    } else zoomBy(e.deltaY < 0 ? 1.25 : 0.8, x2t(x));
+  }, { passive: false });
+  new ResizeObserver(() => { peaksCache.key = null; markWaveDirty(); drawWave(true); }).observe(wave);
 }
 
 function splitAtPlayhead() {
@@ -1198,6 +1390,10 @@ function showKeys() {
     <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></td><td>復原／重做</td></tr>
     <tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>搜尋字幕</td></tr>
     <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>立刻儲存</td></tr>
+    <tr><td><kbd>Shift</kbd>／<kbd>Ctrl</kbd>+點擊</td><td>範圍選取／多選</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>A</kbd></td><td>全選（可批次位移、合併、刪除）</td></tr>
+    <tr><td>滾輪（波形上）</td><td>縮放時間軸；<kbd>Shift</kbd>+滾輪左右捲動</td></tr>
+    <tr><td><kbd>+</kbd> / <kbd>-</kbd> / <kbd>0</kbd></td><td>放大／縮小／顯示全部</td></tr>
     <tr><td><kbd>Alt</kbd>+滑過波形</td><td>即時試聽</td></tr>
     <tr><td>波形拖曳字幕框</td><td>調時間（按住 <kbd>Alt</kbd> 可越過相鄰句）</td></tr>
     <tr><td>波形空白處拖曳</td><td>新增字幕</td></tr></table>`);
@@ -1218,10 +1414,11 @@ function setupHotkeys() {
     if (mod && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); redo(); return; }
     if (mod && (e.key === 's' || e.key === 'S')) { e.preventDefault(); if (state.editing >= 0) commitEdit(); save.request(0); toast('已儲存'); return; }
     if (mod && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); $('searchBox').focus(); $('searchBox').select(); return; }
+    if (mod && (e.key === 'a' || e.key === 'A') && !typing && !modalOpen) { e.preventDefault(); selectAll(); return; }
     if (e.key === 'Escape') {
       if (modalOpen) { closeModal(); return; }
       if (typing) { e.target.blur(); return; }
-      selectCue(-1); return;
+      selectCue(-1); refreshSelection(); return;
     }
     if (typing || modalOpen || state.editing >= 0) return;
     switch (e.code) {
@@ -1238,7 +1435,10 @@ function setupHotkeys() {
         break;
       }
       case 'Enter': { const i = state.selected >= 0 ? state.selected : state.activeCue; if (i >= 0) { e.preventDefault(); editCue(i); } break; }
-      case 'Delete': { const i = state.selected; if (i >= 0) { e.preventDefault(); deleteCue(i); } break; }
+      case 'Delete': { if (state.multi.size > 1) { e.preventDefault(); deleteSelected(); } else { const i = state.selected; if (i >= 0) { e.preventDefault(); deleteCue(i); } } break; }
+      case 'Equal': case 'NumpadAdd': e.preventDefault(); zoomBy(1.5); break;
+      case 'Minus': case 'NumpadSubtract': e.preventDefault(); zoomBy(1 / 1.5); break;
+      case 'Digit0': e.preventDefault(); setView(0, 0); break;
       case 'BracketLeft': e.preventDefault(); setSelectedEdge('start'); break;
       case 'BracketRight': e.preventDefault(); setSelectedEdge('end'); break;
       case 'KeyB': e.preventDefault(); splitAtPlayhead(); break;
@@ -1286,6 +1486,15 @@ function setupHotkeys() {
   $('searchBox').onkeydown = e => { if (e.key === 'Enter') { const n = nextVisibleIndex(state.selected, 1); if (n >= 0) { selectCue(n, true); video.currentTime = state.cues[n].start + 0.01; } } };
   $('btnIssues').onclick = () => { state.onlyIssues = !state.onlyIssues; renderCues(); };
   $('btnUndo').onclick = undo;
+  $('btnImport').onclick = importSubtitle;
+  $('zoomIn').onclick = () => zoomBy(1.5);
+  $('zoomOut').onclick = () => zoomBy(1 / 1.5);
+  $('zoomFit').onclick = () => setView(0, 0);
+  $('multiShift').onclick = () => { const ms = parseInt($('multiMs').value, 10); if (!Number.isFinite(ms) || !ms) { toast('請輸入位移的毫秒數，例如 -300 或 500'); return; } shiftSelected(ms); };
+  $('multiMs').onkeydown = e => { if (e.key === 'Enter') $('multiShift').click(); };
+  $('multiMerge').onclick = mergeSelected;
+  $('multiDelete').onclick = deleteSelected;
+  $('multiClear').onclick = () => { state.multi.clear(); refreshSelection(); };
   $('btnRedo').onclick = redo;
   $('btnGlossary').onclick = showGlossary;
   $('btnStyles').onclick = showStyles;
@@ -1312,6 +1521,10 @@ function setupHotkeys() {
       $('timeLabel').textContent = fmtT(t);
       if (!seeking) $('seekBar').value = t;
       renderOverlay(t);
+      if (state.view.span > 0 && !waveDrag) {
+        const t0 = viewT0(), s = viewSpan();
+        if (t < t0 || t > t0 + s) setView(t - s * 0.1, s);          // 播放頭跑出畫面就翻頁
+      }
       drawWave(false);
     }
     requestAnimationFrame(loop);

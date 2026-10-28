@@ -491,6 +491,7 @@
     $('txFiles').classList.add('hidden'); $('txFiles').innerHTML = '';
     $('txText').innerHTML = ''; $('txLog').textContent = '';
     $('txCopy').disabled = true;
+    $('txToEditor').disabled = true;
     showTab('log');
     $('txFill').style.width = '0%';
     $('txProgress').classList.add('indeterminate');
@@ -585,6 +586,7 @@
       box.append(row);
     }
     $('txCopy').disabled = !st.text;
+    $('txToEditor').disabled = !(res && res.cues && res.cues.length);
   }
 
   async function copyText(t) {
@@ -623,6 +625,14 @@
       toast((await copyText(st.text)) ? '已複製全文到剪貼簿' : '複製失敗，請直接選取文字複製');
     };
     $('txOpenOut').onclick = () => tx.open_folder((st.result && st.result.outdir) || st.outdir);
+    $('txToEditor').onclick = async () => {
+      if (!tx.tx_to_project) { toast('瀏覽器預覽模式不支援'); return; }
+      const r = await tx.tx_to_project();
+      if (!r || r.error) { toast((r && r.error) || '無法建立專案'); return; }
+      showView('editor');
+      if (window.__asOpenProject) await window.__asOpenProject(r.name);
+      toast(`已建立專案「${r.name}」，可以逐句修改了`);
+    };
     for (const id of ['txStart', 'txEnd']) $(id).onkeydown = e => { if (e.key === 'Enter') start(); };
   }
 

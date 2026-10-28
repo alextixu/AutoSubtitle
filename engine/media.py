@@ -69,3 +69,16 @@ def detect_scenes(path: str, threshold: float = 0.08, sample_fps: float = 8.0) -
                         cuts.append(round(t, 3))
             prev = arr
     return cuts
+
+
+def video_size(path: str) -> tuple[int, int] | None:
+    """影片寬高（沒有影像軌就回 None）。匯出 ASS 時用來設定 PlayRes，讓位置與字級正確。"""
+    import av
+    try:
+        with av.open(path) as c:
+            v = next((s for s in c.streams if s.type == 'video'), None)
+            if v and v.codec_context.width and v.codec_context.height:
+                return int(v.codec_context.width), int(v.codec_context.height)
+    except Exception:  # noqa: BLE001
+        return None
+    return None

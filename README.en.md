@@ -126,6 +126,11 @@ The **Models** page in the sidebar lists every speech model with its size, wheth
 | Drag a subtitle box on the waveform | Change its timing, snapping to cuts and neighbouring edges |
 | Drag on empty waveform | Create a new subtitle |
 | Double-click the waveform | Add or remove a marker |
+| Scroll on the waveform, `+` / `-` / `0` | Zoom the timeline, show all; `Shift`+scroll pans |
+| `Shift` / `Ctrl`+click, `Ctrl+A` | Multi-select; shift by ±ms, merge, or delete at once |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
+| **Import subtitles** button | Bring in an existing SRT / VTT file to edit |
+| **Open in editor** on a transcript result | Turn a transcript into an editor project |
 
 ### Command line
 

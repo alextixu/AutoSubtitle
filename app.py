@@ -22,7 +22,7 @@ from pathlib import Path
 APP_DIR = Path(__file__).parent
 sys.path.insert(0, str(APP_DIR))
 
-from engine import exporter, media, transcriber          # noqa: E402
+from engine import exporter, media, subimport, transcriber  # noqa: E402
 from engine.paths import DATA_DIR                         # noqa: E402
 from engine.glossary import Glossary                      # noqa: E402
 from engine.projects import ProjectStore                  # noqa: E402
@@ -155,6 +155,22 @@ class Api:
         except (OSError, ValueError) as e:
             return {'error': f'寫入專案檔失敗：{e}'}
 
+    def import_subtitle(self):
+        """選一個 SRT／VTT 檔，回傳解析好的 cues（由前端放進專案，可以復原）"""
+        import webview
+        r = self._window.create_file_dialog(
+            webview.FileDialog.OPEN, file_types=('字幕檔 (*.srt;*.vtt)', '所有檔案 (*.*)'))
+        if not r:
+            return {'cancelled': True}
+        path = r if isinstance(r, str) else r[0]
+        try:
+            cues = subimport.load(path)
+        except (OSError, ValueError) as e:
+            return {'error': f'讀不到字幕檔：{e}'}
+        if not cues:
+            return {'error': '這個檔案裡沒有找到字幕'}
+        return {'ok': True, 'cues': cues, 'name': Path(path).name}
+
     def editor_busy(self):
         return self._job.get('state') == 'running'
 
@@ -209,6 +225,8 @@ class Api:
             if stage == 'download' and extra:
                 self._job.update(stage=stage, progress=frac or 0.0,
                                  status='下載模型 %.0f/%.0f MB' % (extra['done'] / 1e6, extra['total'] / 1e6))
+            elif stage == 'wait':
+                self._job.update(stage=stage, progress=0.0, status='等待另一個辨識工作完成…')
             elif stage == 'decode':
                 self._job.update(stage=stage, progress=0.0, status='讀取音訊中…')
             elif stage == 'load':
@@ -311,7 +329,8 @@ class Api:
             return {'cancelled': True}
         out = r if isinstance(r, str) else r[0]
         try:
-            exporter.export_file(data['cues'], fmt, out, style)
+            size = media.video_size(data['media']) if fmt == 'ass' and Path(data['media']).exists() else None
+            exporter.export_file(data['cues'], fmt, out, style, size=size)
         except (OSError, ValueError, KeyError) as e:
             return {'error': f'{type(e).__name__}: {e}'}
         return {'ok': True, 'path': out}

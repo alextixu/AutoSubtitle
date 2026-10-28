@@ -186,7 +186,7 @@ class TranscribeJob:
     def _on_stage(self, stage: str, frac, extra):
         if self.cancel.is_set():
             raise Cancelled
-        texts = {'decode': '讀取音訊中…', 'load': '載入模型中…'}
+        texts = {'decode': '讀取音訊中…', 'load': '載入模型中…', 'wait': '等待另一個辨識工作完成…'}
         with self.lock:
             first = stage != self.stage
             self.stage, self.stage_frac = stage, frac
@@ -199,6 +199,8 @@ class TranscribeJob:
             m = models.info(extra['model'])
             self.log('第一次使用「%s」模型（%s），先下載 %.0f MB，之後離線可用。'
                      % (m['label'], extra['model'], extra['total'] / 1e6))
+        elif first and stage == 'wait':
+            self.log('字幕編輯器正在辨識，等它完成後開始。')
         elif first and stage == 'decode':
             self.log('讀取音訊…')
         elif first and stage == 'load':
@@ -222,6 +224,8 @@ class TranscribeJob:
             self.log(f'輸出 {f}')
         with self.lock:
             self.progress, self.elapsed = 1.0, elapsed
+            self.full_cues = cues                 # 含詞級時間戳，給「用字幕編輯器打開」
+            self.src, self.style_offset = str(p['src']), p['start']
             self.result = {
                 'cues': [{'start': c['start'], 'end': c['end'], 'text': c['text'],
                           'clock': fmt_clock(c['start'])} for c in cues],
@@ -396,6 +400,23 @@ class Api(EditorApi):
 
     def tx_busy(self):
         return self._tx.busy
+
+    def tx_to_project(self):
+        """把最近一次逐字稿轉檔的結果建成字幕編輯器專案（含詞級時間戳），回傳專案名稱"""
+        job = self._tx
+        if job.state != 'done' or not getattr(job, 'full_cues', None):
+            return {'error': '還沒有可以打開的轉檔結果'}
+        base = Path(job.src).stem
+        existing = {p['name'] for p in self.store.list()}
+        name, k = base, 2
+        while name in existing:
+            name, k = f'{base} ({k})', k + 1
+        self.store.create(name, job.src)
+        data = self.store.load(name)
+        data['cues'] = job.full_cues
+        data['language'] = (job.result or {}).get('language')
+        self.store.save(name, data)
+        return {'ok': True, 'name': name}
 
     # ----- 模型管理 -----
     def models_list(self):

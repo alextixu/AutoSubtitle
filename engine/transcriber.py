@@ -313,7 +313,29 @@ def _quiet_point(audio, target_sec: float, search: float = 6.0,
     return (best_i + step // 2) / sr
 
 
-def transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
+_job_lock = None
+
+
+def transcribe(*args, on_stage=None, **kwargs) -> dict:
+    """辨識入口：同一時間只跑一個辨識工作（逐字稿轉檔與字幕編輯器共用）。
+    另一個工作進行中時，先回報 on_stage('wait')，等它結束再開始；等待期間 on_stage 拋例外即可取消。
+    參數與回傳見 _transcribe。"""
+    global _job_lock
+    import threading
+    if _job_lock is None:
+        _job_lock = threading.Lock()
+    stage = on_stage or (lambda *a, **k: None)
+    if not _job_lock.acquire(blocking=False):
+        stage('wait', None, None)
+        while not _job_lock.acquire(timeout=0.5):
+            stage('wait', None, None)
+    try:
+        return _transcribe(*args, on_stage=on_stage, **kwargs)
+    finally:
+        _job_lock.release()
+
+
+def _transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
                lang: str | None = None, glossary_words: list[str] | None = None,
                to_taiwan: bool = True, progress=None,
                chunk_sec: float = CHUNK_SEC,
