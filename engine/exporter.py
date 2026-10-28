@@ -23,7 +23,23 @@ def fmt_ass_time(sec: float) -> str:
     return f"{h:d}:{m:02d}:{s:02d}.{cs:02d}"
 
 
+def normalize(cues) -> list[dict]:
+    """匯出前的保險：依開始時間排序、負值歸零、結束至少晚於開始；不改原資料"""
+    out = []
+    for c in cues:
+        try:
+            start, end = max(0.0, float(c['start'])), float(c['end'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end < start + 0.05:
+            end = start + 0.05
+        out.append({**c, 'start': start, 'end': end})
+    out.sort(key=lambda c: (c['start'], c['end']))
+    return out
+
+
 def to_srt(cues) -> str:
+    cues = normalize(cues)
     out = []
     for i, c in enumerate(cues, 1):
         out.append(f"{i}\n{fmt_time(c['start'])} --> {fmt_time(c['end'])}\n{c['text']}\n")
@@ -31,6 +47,7 @@ def to_srt(cues) -> str:
 
 
 def to_vtt(cues) -> str:
+    cues = normalize(cues)
     out = ['WEBVTT\n']
     for c in cues:
         out.append(f"{fmt_time(c['start'], vtt=True)} --> {fmt_time(c['end'], vtt=True)}\n{c['text']}\n")
@@ -38,6 +55,7 @@ def to_vtt(cues) -> str:
 
 
 def to_txt(cues) -> str:
+    cues = normalize(cues)
     return '\n'.join(c['text'] for c in cues) + '\n'
 
 
@@ -50,6 +68,7 @@ def _ass_color(hexcolor: str, alpha: int = 0) -> str:
 
 def to_ass(cues, style: dict | None = None, play_w: int = 1920, play_h: int = 1080) -> str:
     """帶樣式的 ASS。style 鍵：font,size,color,outline_color,outline,pos_y(0~1),karaoke(bool)"""
+    cues = normalize(cues)
     st = {'font': 'Noto Sans TC', 'size': 64, 'color': '#FFFFFF',
           'outline_color': '#000000', 'outline': 3, 'pos_y': 0.86,
           'karaoke': False, 'karaoke_color': '#39FF14'}

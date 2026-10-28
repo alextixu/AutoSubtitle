@@ -50,11 +50,32 @@ class ProjectStore:
         return json.loads(pj.read_text(encoding='utf-8'))
 
     def save(self, name: str, data: dict):
+        """先寫到暫存檔再換名：寫到一半當機也不會留下半個 project.json"""
+        import os
         data['updated'] = time.time()
         d = self._dir(name)
         d.mkdir(parents=True, exist_ok=True)
-        (d / 'project.json').write_text(
-            json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        tmp = d / 'project.json.tmp'
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        os.replace(tmp, d / 'project.json')
+
+    def snapshot(self, name: str, tag: str, keep: int = 8) -> Path | None:
+        """把目前的 project.json 複製到 history/，例如重新辨識前；只保留最近 keep 份"""
+        import shutil
+        pj = self._dir(name) / 'project.json'
+        if not pj.exists():
+            return None
+        hist = self._dir(name) / 'history'
+        hist.mkdir(exist_ok=True)
+        dst = hist / f'{time.strftime("%Y%m%d-%H%M%S")}-{tag}.json'
+        shutil.copy2(pj, dst)
+        old = sorted(hist.glob('*.json'))[:-keep]
+        for f in old:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        return dst
 
     def delete(self, name: str):
         import shutil

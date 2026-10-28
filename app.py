@@ -124,6 +124,7 @@ class Api:
         self.styles_path = DATA_DIR / 'styles.json'
         self.server = MediaServer()
         self._job: dict = {'state': 'idle', 'progress': 0.0, 'error': None, 'project': None}
+        self._job_cancel = threading.Event()
         self._window = None  # gui.main() 塞入；加底線是為了不讓 pywebview 把視窗物件當 API 掃描
 
     # ----- 專案 -----
@@ -143,12 +144,24 @@ class Api:
         return data
 
     def save_project(self, name, cues, style, scenes=None):
-        data = self.store.load(name) or {}
-        data['cues'] = cues
-        data['style'] = style
-        if scenes is not None:
-            data['scenes'] = scenes
-        self.store.save(name, data)
+        try:
+            data = self.store.load(name) or {}
+            data['cues'] = cues
+            data['style'] = style
+            if scenes is not None:
+                data['scenes'] = scenes
+            self.store.save(name, data)
+            return {'ok': True}
+        except (OSError, ValueError) as e:
+            return {'error': f'寫入專案檔失敗：{e}'}
+
+    def editor_busy(self):
+        return self._job.get('state') == 'running'
+
+    def cancel_transcribe(self):
+        if self._job.get('state') == 'running':
+            self._job_cancel.set()
+            self._job.update(status='取消中…')
         return {'ok': True}
 
     def delete_project(self, name):
@@ -180,8 +193,19 @@ class Api:
             return {'error': '找不到媒體檔'}
         self._job = {'state': 'running', 'progress': 0.0, 'error': None, 'project': name,
                      'device': None, 'stage': '', 'status': '準備中…'}
+        self._job_cancel.clear()
+        if data.get('cues'):
+            self.store.snapshot(name, 'before-transcribe')   # 重新辨識前留一份
+
+        class _Cancelled(Exception):
+            pass
+
+        def check_cancel():
+            if self._job_cancel.is_set():
+                raise _Cancelled
 
         def on_stage(stage, frac, extra):
+            check_cancel()
             if stage == 'download' and extra:
                 self._job.update(stage=stage, progress=frac or 0.0,
                                  status='下載模型 %.0f/%.0f MB' % (extra['done'] / 1e6, extra['total'] / 1e6))
@@ -191,6 +215,7 @@ class Api:
                 self._job.update(stage=stage, progress=0.0, status='載入模型中…')
 
         def on_prog(p):
+            check_cancel()
             self._job.update(stage='transcribe', progress=p, status='辨識中 %.0f%%' % (p * 100))
 
         def run():
@@ -200,12 +225,20 @@ class Api:
                     glossary_words=self.glossary.words,
                     progress=on_prog, on_stage=on_stage,
                     on_model=lambda info: self._job.update(device=info))
-                data['cues'] = r['cues']
-                data['language'] = r['language']
-                self.store.save(name, data)
+                # 辨識期間使用者可能改了樣式或切點：重新載入最新內容，只更新字幕與語言
+                latest = self.store.load(name) or data
+                latest['cues'] = r['cues']
+                latest['language'] = r['language']
+                self.store.save(name, latest)
                 self._job.update(state='done', progress=1.0)
+            except _Cancelled:
+                self._job.update(state='cancelled', status='已取消')
             except Exception as e:  # noqa: BLE001
-                self._job.update(state='error', error=str(e))
+                from engine import models
+                if isinstance(e, models.DownloadCancelled):
+                    self._job.update(state='cancelled', status='已取消')
+                else:
+                    self._job.update(state='error', error=str(e))
 
         threading.Thread(target=run, daemon=True).start()
         return {'ok': True}
@@ -277,7 +310,10 @@ class Api:
         if not r:
             return {'cancelled': True}
         out = r if isinstance(r, str) else r[0]
-        exporter.export_file(data['cues'], fmt, out, style)
+        try:
+            exporter.export_file(data['cues'], fmt, out, style)
+        except (OSError, ValueError, KeyError) as e:
+            return {'error': f'{type(e).__name__}: {e}'}
         return {'ok': True, 'path': out}
 
     def burn_video(self, name, style=None):
@@ -289,7 +325,10 @@ class Api:
         if not r:
             return {'cancelled': True}
         out = r if isinstance(r, str) else r[0]
-        ok, msg = exporter.burn_video(data['media'], data['cues'], out, style)
+        try:
+            ok, msg = exporter.burn_video(data['media'], exporter.normalize(data['cues']), out, style)
+        except (OSError, ValueError) as e:
+            return {'ok': False, 'msg': f'{type(e).__name__}: {e}'}
         return {'ok': ok, 'msg': msg}
 
 

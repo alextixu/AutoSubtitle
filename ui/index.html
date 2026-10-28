@@ -206,9 +206,9 @@
           <p class="lead">聽打、斷句、對時間全自動，逐句修改、上樣式，匯出字幕檔或成品影片。</p>
         </header>
         <div class="home-new">
-          <input id="npName" class="field" placeholder="新專案名稱">
           <button id="npPick" class="btn">選擇影音檔</button>
-          <span id="npFile" class="np-file"></span>
+          <span id="npFile" class="np-file">或把影音檔拖進視窗</span>
+          <input id="npName" class="field" placeholder="專案名稱（選檔後自動帶入）">
           <button id="npCreate" class="btn primary">建立專案</button>
         </div>
         <div id="projList" class="proj-list"></div>
@@ -228,13 +228,20 @@
               <option value="large-v3">large-v3（最準，建議 GPU）</option>
             </select>
             <button id="btnTranscribe" class="btn primary">開始辨識</button>
+            <button id="btnCancelJob" class="btn hidden">取消</button>
             <div id="jobBar" class="job-bar hidden"><div id="jobFill"></div></div>
             <span id="jobStatus" class="job-status hidden"></span>
             <span id="jobDevice" class="dev-chip hidden"></span>
             <button id="btnScenes" class="btn" title="偵測影片剪輯點，波形區會出現藍點可磁吸">切點偵測</button>
           </div>
+          <div class="tb-group">
+            <button id="btnUndo" class="btn sm icon" title="復原（Ctrl+Z）" disabled>↶</button>
+            <button id="btnRedo" class="btn sm icon" title="重做（Ctrl+Shift+Z）" disabled>↷</button>
+            <button id="btnIssues" class="btn sm" title="只顯示太快、太短、太長、重疊或沒有文字的句子">問題句</button>
+            <span id="saveStatus" class="save-status"></span>
+          </div>
           <div class="tb-group search">
-            <input id="searchBox" class="field" placeholder="搜尋字幕">
+            <input id="searchBox" class="field" placeholder="搜尋字幕（Ctrl+F）">
             <input id="replaceBox" class="field" placeholder="取代為">
             <button id="btnReplace" class="btn sm">全部取代</button>
           </div>
@@ -249,7 +256,7 @@
         <!-- 波形區 -->
         <div class="wave-wrap">
           <canvas id="wave"></canvas>
-          <div id="waveHint" class="wave-hint">滑鼠掃過試聽・拖曳字幕框調時間・空白處拖曳新增・雙擊放 Mark 點・B 鍵切開</div>
+          <div id="waveHint" class="wave-hint"></div>
         </div>
 
         <div class="main-split">
@@ -261,8 +268,24 @@
               <div id="subOverlay" class="sub-overlay"></div>
             </div>
             <div class="video-ctrl">
-              <button id="btnPlay" class="btn sm">播放／暫停</button>
+              <button id="btnPlay" class="btn sm play" title="播放／暫停（Space）">播放</button>
               <span id="timeLabel" class="time-label">0:00.0</span>
+              <input type="range" id="seekBar" class="seek" min="0" max="0" step="0.01" value="0" title="拖曳跳到任何位置">
+              <span id="durLabel" class="time-label dur">0:00.0</span>
+              <select id="speedSel" class="field sm" title="播放速度">
+                <option value="0.5">0.5×</option>
+                <option value="0.75">0.75×</option>
+                <option value="1" selected>1×</option>
+                <option value="1.25">1.25×</option>
+                <option value="1.5">1.5×</option>
+                <option value="2">2×</option>
+              </select>
+            </div>
+            <div class="video-ctrl secondary">
+              <label class="ctl" title="播放時字幕列表自動捲到目前句"><input type="checkbox" id="followToggle" checked> 跟隨播放</label>
+              <label class="ctl" title="反覆播放目前這一句，方便對時間"><input type="checkbox" id="loopToggle"> 循環本句</label>
+              <label class="ctl" title="滑鼠滑過波形就試聽（不開的話按住 Alt 也可以）"><input type="checkbox" id="scrubToggle"> 滑過試聽</label>
+              <span class="ctl-spacer"></span>
               <label class="ctl"><input type="checkbox" id="safeToggle"> 安全框</label>
               <select id="safeMode" class="field sm">
                 <option value="h">橫式（YouTube）</option>
@@ -316,6 +339,7 @@
   <div id="modal" class="modal" role="dialog"></div>
 </div>
 <div id="toasts" class="toasts"></div>
+<div id="dropOverlay" class="drop-overlay hidden">放開以選取這個影音檔</div>
 
 <script src="app.js"></script>
 <script src="shell.js"></script>

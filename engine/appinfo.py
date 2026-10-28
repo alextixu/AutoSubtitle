@@ -29,7 +29,7 @@ LOG_FILE = LOG_DIR / 'autosubtitle.log'
 CRASH_FILE = LOG_DIR / 'crash.log'
 SETTINGS_FILE = DATA_DIR / 'settings.json'
 UPDATE_CACHE = DATA_DIR / 'update.json'
-DEFAULTS = {'check_updates': True}
+DEFAULTS = {'check_updates': True, 'onboarded': False}
 _crash_fp = None
 
 

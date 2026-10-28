@@ -290,6 +290,7 @@ class Api(EditorApi):
     # ----- 視窗 / 一般 -----
     def get_info(self):
         return {'app': APP_TITLE, 'version': __version__, 'initial_view': self._initial_view,
+                'settings': appinfo.load_settings(),
                 'outdir': str(self._outdir), 'models': MODELS,
                 'ffmpeg': exporter.has_ffmpeg(), 'platform': sys.platform,
                 'compute': self.get_compute()}
@@ -612,6 +613,27 @@ def _hard_exit(code: int = 0):
     os._exit(code)
 
 
+def _startup_bg() -> str:
+    """視窗底色跟著系統主題，避免深色模式啟動時先閃一下白"""
+    if sys.platform == 'win32':
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r'Software\Microsoft\Windows\Themes\Personalize') as k:
+                light, _ = winreg.QueryValueEx(k, 'AppsUseLightTheme')
+                return '#f5f5f7' if light else '#1c1c1e'
+        except OSError:
+            pass
+    elif sys.platform == 'darwin':
+        try:
+            import subprocess as sp
+            r = sp.run(['defaults', 'read', '-g', 'AppleInterfaceStyle'], capture_output=True, text=True, timeout=2)
+            return '#1c1c1e' if 'Dark' in r.stdout else '#f5f5f7'
+        except Exception:  # noqa: BLE001
+            pass
+    return '#f5f5f7'
+
+
 def _check_webview2():
     """Windows 沒有 WebView2 Runtime 時，視窗會是空白或直接失敗；先提醒並提供下載頁"""
     if appinfo.webview2_installed() is not False:
@@ -656,18 +678,50 @@ def main(default_view: str = 'transcribe'):
     win = webview.create_window(
         APP_TITLE, str(ui_file()), js_api=api,
         width=1280, height=840, min_size=(980, 660), text_select=True,
-        background_color='#f5f5f7')
+        background_color=_startup_bg())
     api._window = win
 
+    def flush_editor():
+        """關閉前把編輯器裡還沒存的內容直接寫檔（不靠前端的非同步存檔）"""
+        try:
+            raw = win.evaluate_js('window.__asDumpProject ? window.__asDumpProject() : null')
+            if raw:
+                import json
+                d = json.loads(raw) if isinstance(raw, str) else raw
+                api.save_project(d['name'], d['cues'], d['style'], d.get('scenes'))
+        except Exception as e:  # noqa: BLE001
+            appinfo.write_log(f'關閉前存檔失敗：{e}')
+
     def on_closing():
-        if not api.tx_busy():
-            return True
-        ok = win.create_confirmation_dialog(APP_NAME, '還在轉檔，確定要中止並關閉？')
-        if ok:
+        busy = api.tx_busy() or api.editor_busy()
+        if busy:
+            ok = win.create_confirmation_dialog(APP_NAME, '還在辨識，確定要中止並關閉？')
+            if not ok:
+                return False
             api.tx_cancel()
-        return bool(ok)
+            api.cancel_transcribe()
+        flush_editor()
+        return True
+
+    def on_drop(e):
+        """拖放檔案：pywebview 只在 Python 端的 DOM 事件裡給完整路徑，轉交給前端"""
+        try:
+            files = (e.get('dataTransfer') or {}).get('files') or []
+            paths = [f.get('pywebviewFullPath') for f in files if f.get('pywebviewFullPath')]
+            if paths:
+                import json
+                win.evaluate_js(f'window.__asDrop && window.__asDrop({json.dumps(paths)})')
+        except Exception as ex:  # noqa: BLE001
+            appinfo.write_log(f'拖放處理失敗：{ex}')
+
+    def on_loaded():
+        try:
+            win.dom.document.events.drop += on_drop
+        except Exception as ex:  # noqa: BLE001
+            appinfo.write_log(f'無法註冊拖放事件：{ex}')
 
     win.events.closing += on_closing
+    win.events.loaded += on_loaded
     _check_webview2()
     webview.start(debug='--debug' in sys.argv)
     if FROZEN:

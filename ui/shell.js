@@ -367,6 +367,60 @@
     close.focus();
   }
 
+  // ---------- 拖放檔案 ----------
+  // 完整路徑只有 pywebview 在 Python 端拿得到（gui.py on_drop → window.__asDrop）；這裡只處理畫面與路由
+  window.__asDrop = paths => {
+    const p = Array.isArray(paths) ? paths[0] : paths;
+    if (!p) return;
+    const view = VIEWS.find(v => !$('view-' + v).classList.contains('hidden'));
+    if (view === 'transcribe') { setFile(p); toast('已選好：' + basename(p)); }
+    else if (view === 'editor' && window.__asEditorDrop) window.__asEditorDrop(p);
+    else { showView('transcribe'); setFile(p); toast('已選好：' + basename(p)); }
+  };
+  (function bindDrop() {
+    let depth = 0;
+    const over = $('dropOverlay');
+    const hasFiles = e => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+    document.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); depth++; over.classList.remove('hidden'); });
+    document.addEventListener('dragover', e => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+    document.addEventListener('dragleave', e => { if (!hasFiles(e)) return; depth = Math.max(0, depth - 1); if (!depth) over.classList.add('hidden'); });
+    document.addEventListener('drop', e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); depth = 0; over.classList.add('hidden');
+      if (!(window.pywebview && window.pywebview.api)) toast('瀏覽器預覽模式拿不到檔案路徑，請用桌面程式');
+      // 桌面程式：路徑由後端的 DOM drop 事件送到 window.__asDrop
+    });
+  })();
+
+  // ---------- 第一次使用 ----------
+  function showOnboarding() {
+    const modal = $('modal'), back = $('modalBack');
+    modal.innerHTML = '';
+    const h = Object.assign(document.createElement('h2'), { textContent: '歡迎使用字幕工房' });
+    const steps = [
+      ['🔒', '完全在你的電腦上辨識', '影片不會上傳到任何雲端，也不需要登入。只有第一次下載模型時需要網路。'],
+      ['📦', '第一次會先下載模型', '預設的「標準」模型約 486 MB，下載時會顯示進度，之後就能離線使用。側欄「模型」頁可以先下載或刪除。'],
+      ['✂️', '兩種用法', '「逐字稿轉檔」：選檔就轉，產出文字與 SRT。「字幕編輯器」：逐句修改、調時間、上樣式、匯出成品影片。'],
+    ];
+    const list = Object.assign(document.createElement('div'), { className: 'onboard' });
+    for (const [icon, t, d] of steps) {
+      const row = document.createElement('div');
+      row.className = 'onboard-row';
+      row.append(Object.assign(document.createElement('span'), { className: 'onboard-icon', textContent: icon }));
+      const txt = document.createElement('div');
+      txt.append(Object.assign(document.createElement('b'), { textContent: t }), Object.assign(document.createElement('p'), { textContent: d }));
+      row.append(txt);
+      list.append(row);
+    }
+    const actions = Object.assign(document.createElement('div'), { className: 'actions' });
+    const ok = Object.assign(document.createElement('button'), { className: 'btn primary', textContent: '開始使用' });
+    ok.onclick = () => { back.classList.add('hidden'); tx.set_setting && tx.set_setting('onboarded', true); };
+    actions.append(ok);
+    modal.append(h, list, actions);
+    back.classList.remove('hidden');
+    ok.focus();
+  }
+
   // ---------- 逐字稿轉檔 ----------
   const basename = p => (p || '').split(/[\\/]/).pop();
 
@@ -582,6 +636,7 @@
     bindModels();
     refreshModels();
     $('aboutBtn').onclick = showAbout;
+    if (tx !== txMock && info.settings && info.settings.onboarded === false) setTimeout(showOnboarding, 600);
     setTimeout(() => checkUpdate(false), 3000);   // 每天最多一次，可在「關於」關閉
     $('appVersion').textContent = info.version && info.version !== '0.0.0-dev' ? `v${info.version}` : (info.version ? '開發版' : '');
     st.compute = info.compute || null;
