@@ -126,6 +126,15 @@ class Api:
         self._job: dict = {'state': 'idle', 'progress': 0.0, 'error': None, 'project': None}
         self._job_cancel = threading.Event()
         self._window = None  # gui.main() 塞入；加底線是為了不讓 pywebview 把視窗物件當 API 掃描
+        self._en = False     # 介面是英文時，原生檔案對話框的類型名稱也用英文
+
+    def ui_language(self, lang: str):
+        """前端告知實際使用的介面語言（zh-Hant／en）"""
+        self._en = lang == 'en'
+        return {'ok': True}
+
+    def _ft(self, zh: str, en: str) -> str:
+        return en if self._en else zh
 
     # ----- 專案 -----
     def list_projects(self):
@@ -159,7 +168,7 @@ class Api:
         """選一個 SRT／VTT 檔，回傳解析好的 cues（由前端放進專案，可以復原）"""
         import webview
         r = self._window.create_file_dialog(
-            webview.FileDialog.OPEN, file_types=('字幕檔 (*.srt;*.vtt)', '所有檔案 (*.*)'))
+            webview.FileDialog.OPEN, file_types=(self._ft('字幕檔', 'Subtitles') + ' (*.srt;*.vtt)', self._ft('所有檔案', 'All files') + ' (*.*)'))
         if not r:
             return {'cancelled': True}
         path = r if isinstance(r, str) else r[0]
@@ -188,13 +197,14 @@ class Api:
         import webview
         r = self._window.create_file_dialog(
             webview.OPEN_DIALOG,
-            file_types=('影音檔 (*.mp4;*.mov;*.mkv;*.webm;*.mp3;*.wav;*.m4a)', '所有檔案 (*.*)'))
+            file_types=(self._ft('影音檔', 'Audio & video') + ' (*.mp4;*.mov;*.mkv;*.webm;*.mp3;*.wav;*.m4a)',
+                        self._ft('所有檔案', 'All files') + ' (*.*)'))
         return r[0] if r else None
 
     def pick_font(self):
         import webview
         r = self._window.create_file_dialog(
-            webview.OPEN_DIALOG, file_types=('字型檔 (*.ttf;*.otf;*.woff;*.woff2)',))
+            webview.OPEN_DIALOG, file_types=(self._ft('字型檔', 'Fonts') + ' (*.ttf;*.otf;*.woff;*.woff2)',))
         if not r:
             return None
         return {'path': r[0], 'url': self.server.register(r[0]),

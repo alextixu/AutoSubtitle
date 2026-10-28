@@ -31,7 +31,8 @@ SETTINGS_FILE = DATA_DIR / 'settings.json'
 UPDATE_CACHE = DATA_DIR / 'update.json'
 # recog：逐字稿轉檔與字幕編輯器共用的辨識設定（兩頁改一邊，另一邊同步）
 RECOG_DEFAULTS = {'model': 'small', 'device': 'auto', 'lang': '', 'to_tw': True, 'use_glossary': True}
-DEFAULTS = {'check_updates': True, 'onboarded': False, 'recog': dict(RECOG_DEFAULTS)}
+DEFAULTS = {'check_updates': True, 'onboarded': False, 'recog': dict(RECOG_DEFAULTS),
+            'ui_lang': 'auto'}       # auto（依系統語言）／zh-Hant／en
 RECOG_MODELS = ('tiny', 'base', 'small', 'medium', 'large-v3-turbo', 'large-v3')
 RECOG_LANGS = ('', 'zh', 'en', 'ja', 'ko')
 
@@ -69,6 +70,8 @@ def save_setting(key: str, value) -> dict:
     if key not in DEFAULTS:
         raise ValueError(f'不認識的設定：{key}')
     s = load_settings()
+    if key == 'ui_lang' and value not in ('auto', 'zh-Hant', 'en'):
+        raise ValueError(f'不認識的介面語言：{value}')
     s[key] = clean_recog(value) if key == 'recog' else value
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     tmp = SETTINGS_FILE.with_suffix('.tmp')

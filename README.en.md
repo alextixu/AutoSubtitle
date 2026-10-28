@@ -12,8 +12,10 @@ Speech recognition runs offline. Your videos are never uploaded, and no account 
 - **One window.** A sidebar switches between Transcript and Subtitle Editor. Nothing opens a second window.
 - **Rounded, minimal UI.** Pill buttons, rounded cards, segmented controls, and switches. It follows the system light or dark theme.
 - **Offline speech recognition.** Built on faster-whisper, a CTranslate2 port of Whisper, with automatic detection of 99 languages.
-- **Uses the GPU automatically.** With an NVIDIA card it runs on the GPU, and the sidebar always shows whether the GPU or CPU is in use. A 67-minute meeting took about 2.5 minutes with the medium model on an RTX 3080 Ti.
-- **Handles long videos.** Audio is split at quiet points so memory use stays flat. If memory runs out, the model steps down a size instead of failing.
+- **Uses the GPU automatically.** With an NVIDIA card it runs on the GPU with batched inference, and the sidebar always shows whether the GPU or CPU is in use. A 20-minute talk took about 19 seconds with the medium model on an RTX 3080 Ti.
+- **Handles long videos.** Audio is split at quiet points so memory use stays flat. The model is chosen to fit the free memory before a run starts. If memory still runs out, it steps down a size and resumes from the chunk that failed.
+- **Batch transcription.** Select several files, add a whole folder, or drop them onto the window, and they are transcribed one after another.
+- **Chinese and English interface.** It follows the system language, and you can switch in About.
 - **Taiwan Traditional Chinese.** OpenCC `s2twp` converts Simplified Chinese to Traditional Chinese with Taiwanese vocabulary.
 - **A glossary that learns.** When you correct a subtitle, the app finds what changed and offers to add it to the glossary, which biases the next run.
 - **Full editor.** Waveform timing, scene-cut snapping, live video preview, subtitle styles, karaoke word highlighting, and safe-area guides.
@@ -82,10 +84,11 @@ The first time you use a model, its weights are downloaded once. The `small` mod
 
 ### Transcript
 
-1. Choose a media file. Supported types are mp4, mov, mkv, webm, avi, mp3, wav, m4a, aac, and flac.
-2. For long videos you can transcribe only part of the file. Enter times such as `13:00`, `1:02:03`, or `780`. Leave them empty for the whole file.
-3. Pick a model, language, and compute option. You can add a glossary file, which is plain text with one term per line. With Auto, the GPU is used when available, and the page names the card it will use.
-4. Press Start. Next to the progress bar the page shows the device and precision actually in use, such as `GPU · RTX 3080 Ti · int8_float16`. You can cancel at any time. When it finishes, the transcript appears on the same page, with buttons to copy the text or open the output folder.
+1. Choose one or more media files, or add a folder. You can also drop files or folders onto the window. Supported types are mp4, mov, mkv, webm, avi, mp3, wav, m4a, aac, and flac.
+2. With a single file you can transcribe only part of it. Enter times such as `13:00`, `1:02:03`, or `780`. Leave them empty for the whole file.
+3. Pick a model, language, and compute option. These recognition settings are shared with the subtitle editor, so a change on one page shows up on the other. With My glossary on, the terms collected in the editor are used, and you can add a glossary file too, which is plain text with one term per line. With Auto, the GPU is used when available, and the page names the card it will use.
+4. Press Start. Next to the progress bar the page shows the device and precision actually in use, such as `GPU · RTX 3080 Ti · int8_float16`. You can cancel at any time. With several files, the list shows the state of each one, and a broken file does not stop the rest.
+5. When it finishes, the transcript appears on the same page. With several files, click a file in the list to switch. You can copy the text, open the output folder, or press Open in Subtitle Editor to keep editing.
 
 Each run writes three files:
 
@@ -109,9 +112,11 @@ The **Models** page in the sidebar lists every speech model with its size, wheth
 
 ### Subtitle editor
 
-1. Enter a project name, choose a media file, and create the project.
-2. Press Start Recognition to generate subtitles, then edit them line by line.
+1. Enter a project name, choose a media file, and create the project. With Transcribe after creating checked, recognition starts right away.
+2. Press Transcribe to generate subtitles, then edit them line by line. The Model button in the toolbar changes the recognition settings, which are shared with the Transcribe page.
 3. Adjust the style, drag the subtitle into place on the video, and export.
+
+The sidebar collapses to icons while you edit. Use the button at the top of the sidebar or `Ctrl+\` to expand it. Drag the divider between the video and the subtitle list to resize them, and fold the style panel when you need room. Import subtitles, scene-cut detection, the glossary, the style gallery, and the shortcut list are under More in the toolbar.
 
 | Action | Effect |
 |---|---|
@@ -129,7 +134,7 @@ The **Models** page in the sidebar lists every speech model with its size, wheth
 | Scroll on the waveform, `+` / `-` / `0` | Zoom the timeline, show all; `Shift`+scroll pans |
 | `Shift` / `Ctrl`+click, `Ctrl+A` | Multi-select; shift by ±ms, merge, or delete at once |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
-| **Import subtitles** button | Bring in an existing SRT / VTT file to edit |
+| **More → Import subtitles** | Bring in an existing SRT / VTT file to edit |
 | **Open in editor** on a transcript result | Turn a transcript into an editor project |
 
 ### Command line
@@ -186,10 +191,10 @@ flowchart LR
 ```mermaid
 flowchart TD
   A["Media file"] --> B["PyAV decode<br>16 kHz mono float32"]
-  B --> C{"Longer than 4 minutes?"}
+  B --> C{"Longer than one chunk?<br>CPU 4 min, GPU 8 min"}
   C -- yes --> D["Split at the quietest point<br>within 6 s of each target"]
   C -- no --> E["Single chunk"]
-  D --> F["faster-whisper per chunk<br>VAD filter, word timestamps"]
+  D --> F["faster-whisper<br>batched on GPU, sequential on CPU<br>VAD filter, word timestamps"]
   E --> F
   F --> G["Line breaking by punctuation and length<br>16 CJK chars, 42 Latin chars, max 6 s"]
   G --> H["OpenCC s2twp<br>Taiwan Traditional Chinese"]
@@ -198,9 +203,9 @@ flowchart TD
 ```
 
 1. **Decode.** PyAV reads only the audio stream and resamples it to the 16 kHz mono that Whisper expects. For a partial range it seeks to the nearest packet before the start instead of reading from the beginning, then trims precisely using the first frame's timestamp.
-2. **Chunk.** Feeding a one-hour file in one go makes faster-whisper allocate one huge block for the spectrogram, which often fails. Files longer than 4 minutes are split every 4 minutes, at the quietest 0.1 s window within 6 s of each target, so no sentence is cut in half.
-3. **Recognize.** faster-whisper reimplements Whisper on CTranslate2. On CPU it uses int8 quantization, which is several times faster than the original and uses less memory. Voice activity detection skips silence, and word-level timestamps are requested.
-4. **Context and glossary.** Each chunk gets an `initial_prompt` made of the glossary terms plus about the last 120 characters of the previous chunk. Whisper tends to continue that vocabulary, which improves proper nouns and keeps chunks consistent.
+2. **Chunk.** Feeding a one-hour file in one go makes faster-whisper allocate one huge block for the spectrogram, which often fails. Long files are split into chunks, every 4 minutes on CPU and every 8 minutes on GPU, at the quietest 0.1 s window within 6 s of each target, so no sentence is cut in half.
+3. **Recognize.** faster-whisper reimplements Whisper on CTranslate2. On CPU it uses int8 quantization, which is several times faster than the original and uses less memory. Voice activity detection skips silence, and word-level timestamps are requested. With a GPU it uses `BatchedInferencePipeline`, which sends the 30-second windows that VAD cuts from a chunk to the GPU together. On the same 20 minutes of audio with the medium model, sequential decoding took 78 seconds and batched took 19, and the two transcripts were 95.7% identical.
+4. **Context and glossary.** Glossary terms are passed as `hotwords`, which faster-whisper injects into every 30-second window, so they apply to the whole file. In sequential mode each chunk also gets about the last 120 characters of the previous chunk as `initial_prompt` for continuity. Batched mode leaves the prompt out, because it would be applied to every window.
 5. **Line breaking.** Word timestamps are used to split speech into subtitle-sized lines. Breaks prefer punctuation. Lines are forced to break past 16 CJK characters, 42 Latin characters, or 6 seconds.
 6. **Taiwan Chinese.** When the language is Chinese, OpenCC's `s2twp` profile converts both characters and vocabulary to Taiwanese usage.
 7. **Hallucination filter.** Whisper sometimes invents text during silence. The app drops lines that are nearly zero length, impossibly fast (more than 12 CJK characters per second), or identical to the previous line.
@@ -216,11 +221,13 @@ flowchart TD
 
 ### Memory safeguards
 
-On Windows, `mkl_malloc: failed to allocate memory` usually means the commit limit is exhausted, not physical RAM. The commit limit is RAM plus the page file. The app has three safeguards:
+On Windows, `mkl_malloc: failed to allocate memory` usually means the commit limit is exhausted, not physical RAM. The commit limit is RAM plus the page file. The app has these safeguards:
 
 1. **No MKL memory pool.** It sets `MKL_DISABLE_FAST_MM=1` so MKL does not reserve a large block up front.
-2. **Fewer threads.** It uses 4 inference threads, then retries with 2 and 1, because work buffers are allocated per thread.
-3. **Model ladder.** `large-v3 → medium → small → base → tiny`. If loading or inference runs out of memory, it retries one size smaller and reports the model it actually used.
+2. **Pick a model that fits.** On CPU it reads the free commit memory before starting and compares it with each model's measured peak (tiny about 1.8 GB, base 2.1 GB, small 3.5 GB, medium 6.0 GB), then picks one that will load.
+3. **Fewer threads.** It uses 4 inference threads, then retries with 2 and 1, because work buffers are allocated per thread.
+4. **Model ladder.** `large-v3 → large-v3-turbo → medium → small → base → tiny`. If loading or inference runs out of memory, it releases the model, steps down one size, and resumes from the chunk that failed. Finished chunks are kept, so progress never goes backwards. The result reports the model it actually used.
+5. **One cached model.** The previous model is released before another is loaded, so two models never hold memory at once.
 
 If it still fails, enlarge the page file. Microsoft recommends a manually sized page file with an initial size of 1.5 times your RAM (see [Microsoft Learn](https://learn.microsoft.com/en-us/troubleshoot/windows-client/performance/slow-page-file-growth-memory-allocation-errors)).
 
@@ -253,9 +260,14 @@ engine/
   glossary.py        Glossary and learning from edits
   projects.py        Local project storage (projects/<name>/project.json)
   paths.py           Where resources and user data live (source vs packaged)
+  models.py          Model catalog, resumable and cancellable downloads, deletion
+  appinfo.py         Settings, logs, crash records, update check
+  subimport.py       SRT / VTT import
 ui/
   index.html         Single-window shell
-  shell.js           Sidebar navigation and transcript page
+  shell.js           Sidebar navigation, transcript page with the batch queue, shared recognition settings, models page, About
+  i18n.js            Interface language: in English, replaces on-screen Chinese text as it appears (user subtitles are left alone)
+  i18n-en.js         English dictionary: whole strings and templates with placeholders
   app.js             Subtitle editor
   style.css          Design tokens (light and dark)
 docs/images/         README screenshots

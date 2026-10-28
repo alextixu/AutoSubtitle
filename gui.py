@@ -32,9 +32,8 @@ APP_NAME = 'AutoSubtitle'
 APP_TITLE = 'AutoSubtitle 字幕工房'
 DEFAULT_OUTDIR = OUTPUT_DIR
 MEDIA_EXTS = ('.mp4', '.mov', '.mkv', '.webm', '.avi', '.mp3', '.wav', '.m4a', '.aac', '.flac')
-MEDIA_FILTER = '影音檔 (' + ';'.join('*' + e for e in MEDIA_EXTS) + ')'
+MEDIA_PATTERN = ' (' + ';'.join('*' + e for e in MEDIA_EXTS) + ')'
 MAX_QUEUE = 200  # 一次最多排幾個檔案
-ALL_FILTER = '所有檔案 (*.*)'
 MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo', 'large-v3']
 LOG_KEEP = 300  # 紀錄最多保留的行數
 
@@ -422,7 +421,8 @@ class Api(EditorApi):
         """可多選；回傳路徑清單（沒選回 None）"""
         import webview
         r = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True,
-                                            file_types=(MEDIA_FILTER, ALL_FILTER))
+                                            file_types=(self._ft('影音檔', 'Audio & video') + MEDIA_PATTERN,
+                                                        self._ft('所有檔案', 'All files') + ' (*.*)'))
         if not r:
             return None
         return [r] if isinstance(r, str) else list(r)
@@ -450,7 +450,8 @@ class Api(EditorApi):
 
     def tx_pick_glossary(self):
         import webview
-        return self._dialog(webview.FileDialog.OPEN, file_types=('文字檔 (*.txt)', ALL_FILTER))
+        return self._dialog(webview.FileDialog.OPEN, file_types=(self._ft('文字檔', 'Text') + ' (*.txt)',
+                                                                    self._ft('所有檔案', 'All files') + ' (*.*)'))
 
     def tx_pick_outdir(self):
         import webview
@@ -762,7 +763,7 @@ def uitest(out: str, timeout: float = 90.0) -> int:
     probe = ("JSON.stringify({api: !!(window.pywebview && window.pywebview.api && window.pywebview.api.tx_start),"
              " outdir: (document.getElementById('txOutdir') || {}).textContent || '',"
              " compute: (document.getElementById('sideComputeName') || {}).textContent || '',"
-             " title: document.title})")
+             " title: document.title, lang: (window.__asI18n || {}).lang || ''})")
 
     def run():
         t0 = time.time()
@@ -772,7 +773,7 @@ def uitest(out: str, timeout: float = 90.0) -> int:
                     raw = win.evaluate_js(probe)
                     d = json.loads(raw) if isinstance(raw, str) else (raw or {})
                     report['last'] = d
-                    if d.get('api') and d.get('outdir') and d.get('compute') not in ('', '偵測中…'):
+                    if d.get('api') and d.get('outdir') and d.get('compute') not in ('', '偵測中…', 'Detecting…'):
                         report.update(d, ok=True, seconds=round(time.time() - t0, 1))
                         break
                 except Exception as e:  # noqa: BLE001

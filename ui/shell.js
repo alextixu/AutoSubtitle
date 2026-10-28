@@ -502,6 +502,20 @@
     chk.append(cb, '啟動時自動檢查（每天最多一次，只連線到 GitHub）');
     grid.append(chk, document.createElement('span'));
     sep();
+    // 介面語言：改了之後重新載入畫面（先把編輯中的專案存好）
+    grid.append(Object.assign(document.createElement('span'), { className: 'k', textContent: '介面語言' }));
+    const langSel = Object.assign(document.createElement('select'), { className: 'field sm' });
+    for (const [v, l] of [['auto', '自動（依系統語言）'], ['zh-Hant', '繁體中文'], ['en', 'English']]) langSel.append(new Option(l, v));
+    langSel.value = (window.__asI18n && window.__asI18n.pref) || 'auto';
+    langSel.setAttribute('aria-label', '介面語言');
+    langSel.onchange = async () => {
+      if (window.__asFlushSave) await window.__asFlushSave();
+      window.__asI18n.set(langSel.value);
+      if (tx.set_setting) await tx.set_setting('ui_lang', langSel.value);
+      location.reload();
+    };
+    grid.append(langSel, document.createElement('span'));
+    sep();
     row('授權', 'MIT License · 使用的開源元件與授權', '查看', () => tx.open_notices());
     row('回報問題', '複製版本與最近的紀錄，貼到 GitHub', '複製並前往', async () => {
       const text = await tx.diagnostics();
@@ -866,6 +880,9 @@
     let info = {};
     try { info = (await tx.get_info()) || {}; } catch (e) { info = {}; }
     if (info.settings && info.settings.recog) Object.assign(recog.v, info.settings.recog);
+    const ui = info.settings && info.settings.ui_lang;
+    if (ui && window.__asI18n && ui !== window.__asI18n.pref) { window.__asI18n.set(ui); location.reload(); return; }
+    if (tx.ui_language && window.__asI18n) tx.ui_language(window.__asI18n.lang);
     bindTranscribe(info);
     bindModels();
     refreshModels();
