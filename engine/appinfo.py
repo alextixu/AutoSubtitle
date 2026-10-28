@@ -29,7 +29,27 @@ LOG_FILE = LOG_DIR / 'autosubtitle.log'
 CRASH_FILE = LOG_DIR / 'crash.log'
 SETTINGS_FILE = DATA_DIR / 'settings.json'
 UPDATE_CACHE = DATA_DIR / 'update.json'
-DEFAULTS = {'check_updates': True, 'onboarded': False}
+# recog：逐字稿轉檔與字幕編輯器共用的辨識設定（兩頁改一邊，另一邊同步）
+RECOG_DEFAULTS = {'model': 'small', 'device': 'auto', 'lang': '', 'to_tw': True, 'use_glossary': True}
+DEFAULTS = {'check_updates': True, 'onboarded': False, 'recog': dict(RECOG_DEFAULTS)}
+RECOG_MODELS = ('tiny', 'base', 'small', 'medium', 'large-v3-turbo', 'large-v3')
+RECOG_LANGS = ('', 'zh', 'en', 'ja', 'ko')
+
+
+def clean_recog(v) -> dict:
+    """把前端送來的辨識設定整理成合法值；不認識的欄位丟掉，壞掉的值換回預設"""
+    v = v if isinstance(v, dict) else {}
+    out = dict(RECOG_DEFAULTS)
+    if v.get('model') in RECOG_MODELS:
+        out['model'] = v['model']
+    if v.get('device') in ('auto', 'cpu', 'cuda'):
+        out['device'] = v['device']
+    if v.get('lang') in RECOG_LANGS:
+        out['lang'] = v['lang']
+    for k in ('to_tw', 'use_glossary'):
+        if k in v:
+            out[k] = bool(v[k])
+    return out
 _crash_fp = None
 
 
@@ -38,7 +58,9 @@ _crash_fp = None
 def load_settings() -> dict:
     try:
         data = json.loads(SETTINGS_FILE.read_text(encoding='utf-8'))
-        return {**DEFAULTS, **(data if isinstance(data, dict) else {})}
+        merged = {**DEFAULTS, **(data if isinstance(data, dict) else {})}
+        merged['recog'] = clean_recog(merged.get('recog'))
+        return merged
     except (OSError, ValueError):
         return dict(DEFAULTS)
 
@@ -47,7 +69,7 @@ def save_setting(key: str, value) -> dict:
     if key not in DEFAULTS:
         raise ValueError(f'不認識的設定：{key}')
     s = load_settings()
-    s[key] = value
+    s[key] = clean_recog(value) if key == 'recog' else value
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     tmp = SETTINGS_FILE.with_suffix('.tmp')
     tmp.write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding='utf-8')

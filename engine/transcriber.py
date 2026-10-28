@@ -25,6 +25,14 @@ MAX_DURATION = 6.0
 SAMPLE_RATE = 16000      # whisper 固定吃 16kHz mono
 CHUNK_SEC = 240.0        # 超過此長度就分段辨識
 CPU_THREADS = 4          # ctranslate2 每條執行緒都配一份工作緩衝區，開滿核心很吃記憶體
+BATCH_SIZE = 8           # GPU 批次推論一次送幾個 30 秒視窗
+BATCHED_CHUNK_SEC = 480.0  # 批次推論的分段長度：一段約切出十幾個視窗，夠填滿兩批
+
+# CPU int8、4 執行緒時實測的峰值認可記憶體（commit，MB），含音訊與執行環境。
+# Windows 上 mkl_malloc 撞的是認可額度（實體記憶體＋分頁檔），不是實體記憶體，
+# 所以是拿這個數字跟「剩餘認可額度」比。turbo 與 large-v3 依參數量推估。
+CPU_MEM_MB = {'tiny': 1800, 'base': 2100, 'small': 3500, 'medium': 6000,
+              'large-v3-turbo': 6500, 'large-v3': 10500}
 
 _model_cache: dict = {}
 
@@ -175,6 +183,11 @@ def get_model(size: str = 'small', device: str = 'cpu',
     key = (size, device, cpu_threads)
     if key in _model_cache:
         return _model_cache[key]
+    if _model_cache:
+        # 快取只留一顆：換模型前先放掉舊的，否則兩顆同時在記憶體裡，換大模型時最容易爆
+        _model_cache.clear()
+        import gc
+        gc.collect()
     if device != 'cpu':
         _add_cuda_dll_dirs()
     from faster_whisper import WhisperModel
@@ -209,20 +222,48 @@ def release_model(size: str):
     gc.collect()
 
 
-def load_model_with_fallback(size: str, device: str = 'cpu',
-                             cpu_threads: int = CPU_THREADS, on_fallback=None):
-    """載不動就退而求其次，用能跑的最大模型，而不是整個失敗。
-    回傳 (model, 實際使用的模型名稱)。"""
-    ladder = MODEL_LADDER[MODEL_LADDER.index(size):] if size in MODEL_LADDER else [size]
-    last_err = None
-    for s in ladder:
-        try:
-            return get_model(s, device, cpu_threads), s
-        except MemoryError as e:
-            last_err = e
-            if on_fallback:
-                on_fallback(s)
-    raise last_err or MemoryError('無法載入任何模型')
+def available_memory_mb() -> int | None:
+    """目前還能配置的記憶體（MB）。Windows 回傳剩餘認可額度；Linux 回傳 MemAvailable；
+    macOS 有壓縮記憶體與動態 swap，很少因此失敗，回傳 None（不預選）。"""
+    try:
+        if os.name == 'nt':
+            import ctypes
+            from ctypes import wintypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [('dwLength', wintypes.DWORD), ('dwMemoryLoad', wintypes.DWORD),
+                            ('ullTotalPhys', ctypes.c_uint64), ('ullAvailPhys', ctypes.c_uint64),
+                            ('ullTotalPageFile', ctypes.c_uint64), ('ullAvailPageFile', ctypes.c_uint64),
+                            ('ullTotalVirtual', ctypes.c_uint64), ('ullAvailVirtual', ctypes.c_uint64),
+                            ('ullAvailExtendedVirtual', ctypes.c_uint64)]
+            st = MEMORYSTATUSEX()
+            st.dwLength = ctypes.sizeof(st)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                return int(st.ullAvailPageFile // 2**20)
+        elif Path('/proc/meminfo').exists():
+            for line in Path('/proc/meminfo').read_text().splitlines():
+                if line.startswith('MemAvailable:'):
+                    return int(line.split()[1]) // 1024
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def preselect_model(size: str, device: str, avail_mb: int | None = None) -> str:
+    """開始前依剩餘記憶體挑一個載得動的模型，而不是先撞記憶體不足再退。
+    只對 CPU 做（顯示卡記憶體不足時由模型階梯處理）；量不到記憶體就照原本的選擇。
+    已經在快取裡的模型不算新增用量，直接沿用。"""
+    if device != 'cpu' or size not in MODEL_LADDER:
+        return size
+    if any(k[0] == size for k in _model_cache):
+        return size
+    avail = available_memory_mb() if avail_mb is None else avail_mb
+    if avail is None:
+        return size
+    for s in MODEL_LADDER[MODEL_LADDER.index(size):]:
+        if CPU_MEM_MB.get(s, 0) <= avail:
+            return s
+    return MODEL_LADDER[-1]
 
 
 def clean_cues(cues: list[dict]) -> list[dict]:
@@ -341,7 +382,7 @@ def _transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
                chunk_sec: float = CHUNK_SEC,
                cpu_threads: int = CPU_THREADS,
                start_sec: float = 0.0, end_sec: float | None = None,
-               on_model=None, on_stage=None) -> dict:
+               on_model=None, on_stage=None, batched: bool | None = None) -> dict:
     """辨識檔案 → {language, cues:[{start,end,text,words:[[字,起,迄],…]}]}
     progress: 可選 callback(比例 0~1)。長檔案自動分段，記憶體用量固定。
     start_sec/end_sec 只辨識其中一段，輸出時間仍是原檔案的時間。
@@ -351,9 +392,20 @@ def _transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
     on_model: 可選 callback(dict)，模型載入後通知實際使用的模型與裝置。
     on_stage: 可選 callback(stage, frac, extra)，stage 依序為 download（下載模型，extra 含
     done/total/speed）、decode（解碼音訊）、load（載入模型，frac 為 None）；辨識進度仍走 progress。
-    callback 拋出的例外會中止整個工作（取消就是這樣做的）。"""
+    callback 拋出的例外會中止整個工作（取消就是這樣做的）。
+    batched：用 BatchedInferencePipeline 一次推論多個視窗；None 表示有顯示卡才用。
+    記憶體不足時只重跑失敗的那一段，已完成的段落保留，進度不會倒退。"""
     from engine import models
     device = resolve_device(device)
+    if batched is None:
+        batched = device == 'cuda'
+    if batched and chunk_sec == CHUNK_SEC:
+        chunk_sec = BATCHED_CHUNK_SEC
+    picked = preselect_model(model_size, device)
+    if picked != model_size:
+        print(f'[!] 剩餘記憶體約 {available_memory_mb()} MB，{model_size} 模型需要約 '
+              f'{CPU_MEM_MB[model_size]} MB，先改用 {picked}', flush=True)
+        model_size = picked
     stage = on_stage or (lambda *a, **k: None)
 
     def ensure_model(size: str):
@@ -382,37 +434,44 @@ def _transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
             t += chunk_sec
     bounds.append(total)
 
+    # 已完成的段落與上下文。記憶體不足換小模型時從失敗的段落接著跑，不必從頭來
+    st = {'k': 0, 'cues': [], 'prev_tail': '', 'language': lang, 'prob': 1.0,
+          'cc': None, 'used': []}
+
     def _run(model, used: str) -> dict:
-        cc = None
-        language, lang_prob = lang, 1.0
-        cues: list[dict] = []
-        prev_tail = ''
-        for k in range(len(bounds) - 1):
+        runner, extra = model, {}
+        if batched:
+            from faster_whisper import BatchedInferencePipeline
+            runner, extra = BatchedInferencePipeline(model), {'batch_size': BATCH_SIZE}
+        for k in range(st['k'], len(bounds) - 1):
             a, b = bounds[k], bounds[k + 1]
             clip = audio[int(a * SAMPLE_RATE):int(b * SAMPLE_RATE)]
             if len(clip) < SAMPLE_RATE * 0.1:
+                st['k'] = k + 1
                 continue
-            # 帶上一段結尾當上下文，讓跨段語意連貫
-            prompt = prev_tail.strip() or None
-            segments, info = model.transcribe(
-                clip, language=language, word_timestamps=True,
-                initial_prompt=prompt, hotwords=hotwords, vad_filter=True,
+            # 逐段模式帶上一段結尾當上下文，讓跨段語意連貫；
+            # 批次模式的 prompt 會套到每個視窗，所以不帶
+            prompt = None if batched else (st['prev_tail'].strip() or None)
+            segments, info = runner.transcribe(
+                clip, language=st['language'], word_timestamps=True,
+                initial_prompt=prompt, hotwords=hotwords, vad_filter=True, **extra,
             )
-            if language is None:
-                language, lang_prob = info.language, info.language_probability
-            if cc is None and to_taiwan and language == 'zh':
+            if st['language'] is None:
+                st['language'], st['prob'] = info.language, info.language_probability
+            if st['cc'] is None and to_taiwan and st['language'] == 'zh':
                 from opencc import OpenCC
-                cc = OpenCC('s2twp')
-
+                st['cc'] = OpenCC('s2twp')
+            cc = st['cc']
+            chunk: list[dict] = []
             for seg in segments:
                 if progress:
                     progress(min((a + float(seg.end)) / total, 1.0))
                 if not seg.words:
                     text = clean_text(seg.text)
                     if text:
-                        cues.append({'start': round(a + float(seg.start), 3),
-                                     'end': round(a + float(seg.end), 3),
-                                     'text': cc.convert(text) if cc else text, 'words': []})
+                        chunk.append({'start': round(a + float(seg.start), 3),
+                                      'end': round(a + float(seg.end), 3),
+                                      'text': cc.convert(text) if cc else text, 'words': []})
                     continue
                 max_chars = MAX_CHARS_CJK if is_cjk(seg.text) else MAX_CHARS_LATIN
                 for line in split_segment(seg.words, max_chars):
@@ -424,20 +483,27 @@ def _transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
                     words = [[w.word.strip(), round(a + float(w.start), 3),
                               round(a + float(w.end), 3)]
                              for w in line if w.word.strip()]
-                    cues.append({'start': round(a + float(line[0].start), 3),
-                                 'end': round(a + float(line[-1].end), 3),
-                                 'text': text, 'words': words})
-            prev_tail = ''.join(c['text'] for c in cues[-4:])[-120:]
+                    chunk.append({'start': round(a + float(line[0].start), 3),
+                                  'end': round(a + float(line[-1].end), 3),
+                                  'text': text, 'words': words})
+            # 整段跑完才收進結果；跑到一半失敗的段落由下一個模型整段重跑
+            st['cues'] += chunk
+            st['k'] = k + 1
+            if used not in st['used']:
+                st['used'].append(used)
+            st['prev_tail'] = ''.join(c['text'] for c in st['cues'][-4:])[-120:]
 
         if progress:
             progress(1.0)
-        return {'language': language,
-                'language_probability': round(float(lang_prob), 3),
+        return {'language': st['language'],
+                'language_probability': round(float(st['prob']), 3),
                 'duration': round(total, 3),
                 'model_used': used,
-                'cues': clean_cues(cues)}
+                'models_used': list(st['used']),
+                'batched': bool(batched),
+                'cues': clean_cues(st['cues'])}
 
-    # 模型階梯：載入或推論任一階段撞到記憶體，就退一級重跑，而不是整個失敗
+    # 模型階梯：載入或推論任一階段撞到記憶體，就退一級，從失敗的段落接著跑
     ladder = (MODEL_LADDER[MODEL_LADDER.index(model_size):]
               if model_size in MODEL_LADDER else [model_size])
     last_err: Exception | None = None
@@ -472,7 +538,9 @@ def _transcribe(path: str, model_size: str = 'small', device: str = 'cpu',
             if not _is_mem_error(e):
                 raise
             last_err = e
-            _model_cache.pop((size, device, cpu_threads), None)   # 放掉這顆模型再重試
-            print(f'[!] 記憶體不足：{size} 模型跑到一半失敗，改用小一號的模型重跑',
-                  flush=True)
+            del model
+            release_model(size)                    # 先放掉這顆模型再載小一號的
+            done = st['k']
+            print(f'[!] 記憶體不足：{size} 模型在第 {done + 1}/{len(bounds) - 1} 段失敗，'
+                  f'改用小一號的模型從這一段接著跑（前 {done} 段保留）', flush=True)
     raise last_err or MemoryError('記憶體不足，無法完成辨識')

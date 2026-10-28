@@ -44,6 +44,8 @@ class ProjectStore:
         return data
 
     def load(self, name: str) -> dict | None:
+        if not name:
+            return None
         pj = self._dir(name) / 'project.json'
         if not pj.exists():
             return None

@@ -7,7 +7,10 @@
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const VIEWS = ['transcribe', 'models', 'editor'];
   let tx = null;                 // 有 tx_* 方法的 api（pywebview 或 mock）
-  const st = { file: null, glossary: null, outdir: '', model: 'small', running: false, text: '', result: null, compute: null };
+  const st = { files: [], queue: null, qIndex: 0, view: null, glossary: null, outdir: '', running: false, text: '', result: null, compute: null };
+  // 辨識設定：逐字稿轉檔與字幕編輯器共用一份（存在 settings.json 的 recog），兩邊的表單同步顯示
+  const recog = { v: { model: 'small', device: 'auto', lang: '', to_tw: true, use_glossary: true }, forms: new Set(), gloss: null };
+  const RECOG_MODELS = [['tiny', 'tiny'], ['base', 'base'], ['small', 'small'], ['medium', 'medium'], ['large-v3-turbo', 'turbo'], ['large-v3', 'large']];
 
   // ---------- mock：模型清單（瀏覽器直開時看版面用） ----------
   const mockModels = (() => {
@@ -52,23 +55,37 @@
       open_notices: async () => (toast('mock 模式'), { ok: true }),
       diagnostics: async () => 'AutoSubtitle 0.0.0-dev (mock)',
       copy_text: async () => ({ ok: false }),
-      tx_pick_media: async () => 'E:\\影片\\會議錄影 2026-10-07.mp4',
+      tx_pick_media: async () => ['E:\\影片\\會議錄影 2026-10-07.mp4'],
+      tx_pick_folder: async () => ['E:\\影片\\課程\\第一週.mp4', 'E:\\影片\\課程\\第二週.mp4', 'E:\\影片\\課程\\第三週.m4a'],
+      tx_expand: async ps => ps,
       tx_pick_glossary: async () => 'E:\\影片\\詞庫.txt',
       tx_pick_outdir: async () => 'E:\\影片\\輸出',
       tx_busy: async () => !!job && job.state === 'running',
-      tx_start: async p => { job = { state: 'running', progress: 0, status: '載入模型中…', device: null, logs: [`辨識 ${p.src.split(/[\\/]/).pop()}（模型 ${p.model}）`, '第一次用某個模型會先下載模型檔，之後離線可用。'] }; t0 = Date.now(); return { ok: true }; },
+      tx_start: async p => {
+        const files = p.files || [p.src];
+        job = { state: 'running', progress: 0, status: '載入模型中…', device: null, index: 0,
+                queue: files.map(f => ({ name: f.split(/[\\/]/).pop(), src: f, state: 'pending', summary: null, error: null })),
+                logs: [`辨識 ${files.length} 個檔案（模型 ${p.model}）`] };
+        t0 = Date.now(); return { ok: true };
+      },
       tx_cancel: async () => { if (job) { job.state = 'cancelled'; job.status = '已取消'; job.logs.push('已取消。'); } return { ok: true }; },
       tx_poll: async () => {
         if (!job) return { state: 'idle', progress: 0, status: '', logs: [], elapsed: 0 };
         const el = (Date.now() - t0) / 1000;
         if (job.state === 'running') {
           if (el > 1) job.device = { device_used: 'cuda', device_label: 'GPU · NVIDIA GeForce RTX 3080 Ti', compute_type: 'int8_float16', model: 'small' };
-          job.progress = Math.min(1, Math.max(0, (el - 1.2) / 4));
-          if (job.progress >= 1) { job.state = 'done'; job.status = `完成：${lines.length} 句，語言 zh，耗時 ${el.toFixed(0)} 秒`; job.logs.push(job.status); }
+          const per = 3, i = Math.min(job.queue.length - 1, Math.floor(Math.max(0, el - 1) / per));
+          job.queue.forEach((q, k) => { q.state = k < i ? 'done' : k === i ? 'running' : 'pending'; if (k < i) q.summary = `完成：${lines.length} 句`; });
+          job.index = i; job.stage = 'transcribe';
+          job.progress = Math.min(1, Math.max(0, (el - 1 - i * per) / per));
+          if (i === job.queue.length - 1 && job.progress >= 1) {
+            job.queue[i].state = 'done'; job.queue[i].summary = `完成：${lines.length} 句`;
+            job.state = 'done'; job.status = job.queue.length > 1 ? `佇列完成：${job.queue.length} 個成功` : `完成：${lines.length} 句，語言 zh，耗時 ${el.toFixed(0)} 秒`; job.logs.push(job.status);
+          }
         }
-        return { ...job, elapsed: +el.toFixed(1), summary: job.state === 'done' ? job.status : null };
+        return { ...job, queue: job.queue.map(q => ({ ...q })), elapsed: +el.toFixed(1), summary: job.state === 'done' ? job.status : null };
       },
-      tx_result: async () => ({
+      tx_result: async i => ({ name: job && job.queue[i == null ? job.queue.length - 1 : i].name,
         cues: lines.map((s, i) => ({ start: i * 4.2, end: i * 4.2 + 3.9, text: s, clock: `00:${String(i * 4).padStart(2, '0')}` })),
         files: ['E:\\AutoSubtitle\\output\\demo_逐字稿.txt', 'E:\\AutoSubtitle\\output\\demo_逐字稿_含時間.txt', 'E:\\AutoSubtitle\\output\\demo.srt'],
         outdir: 'E:\\AutoSubtitle\\output', text: lines.join('\n'), language: 'zh', model_used: 'small', elapsed: 5.2, summary: job.status,
@@ -88,6 +105,7 @@
     if (v !== 'editor' && typeof video !== 'undefined' && video && !video.paused) video.pause();
     try { localStorage.setItem('as.view', v); } catch (e) { /* file:// 可能不給存 */ }
     if (v === 'models' && tx) refreshModels();
+    if (v === 'transcribe' && tx) refreshGlossCount();     // 詞庫可能在編輯器改過
   }
 
   // ---------- 運算裝置顯示 ----------
@@ -95,7 +113,7 @@
 
   // 依目前選擇算出「會用什麼」：{device:'cuda'|'cpu'|null, label, warn}
   function plannedDevice() {
-    const c = st.compute, sel = $('txDevice').value;
+    const c = st.compute, sel = recog.v.device;
     if (!c) return { device: null, label: '偵測中…', warn: '' };
     if (sel === 'cpu') return { device: 'cpu', label: c.cpu_label, warn: '' };
     if (c.gpu_ok) return { device: 'cuda', label: c.gpu_label, warn: '' };
@@ -112,17 +130,20 @@
   }
 
   function renderDevice() {
-    const p = plannedDevice(), note = $('txDeviceNote');
-    if (!st.compute) { note.textContent = ''; return; }
-    if (p.device === 'cuda') {
-      note.textContent = `將使用 ${shortDev(p.label)}`; note.className = 'device-note ok';
-    } else if (p.device === 'cpu') {
-      note.textContent = p.warn ? '將使用 CPU（GPU 缺少 CUDA 函式庫）' : `將使用 ${p.label}`;
-      note.className = 'device-note' + (p.warn ? ' warn' : '');
-    } else {
-      note.textContent = '無法使用 GPU，請改選 CPU 或自動'; note.className = 'device-note warn';
+    const p = plannedDevice();
+    if (!st.compute) return;
+    for (const f of recog.forms) {
+      const note = f.el('DeviceNote');
+      if (p.device === 'cuda') {
+        note.textContent = `將使用 ${shortDev(p.label)}`; note.className = 'device-note ok';
+      } else if (p.device === 'cpu') {
+        note.textContent = p.warn ? '將使用 CPU（GPU 缺少 CUDA 函式庫）' : `將使用 ${p.label}`;
+        note.className = 'device-note' + (p.warn ? ' warn' : '');
+      } else {
+        note.textContent = '無法使用 GPU，請改選 CPU 或自動'; note.className = 'device-note warn';
+      }
+      note.title = p.warn || '';
     }
-    note.title = p.warn || '';
     if (!st.running) {
       const cls = p.device === 'cuda' ? 'gpu' : p.device === 'cpu' ? (p.warn ? 'warn' : 'cpu') : 'warn';
       setSide(cls, '目前運算', shortDev(p.label), p.warn || p.label);
@@ -271,21 +292,120 @@
 
   // 逐字稿轉檔頁：模型旁邊顯示大小與是否已下載
   function renderModelHint() {
-    const m = modelById(st.model);
-    $('txModel').querySelectorAll('button[data-v]').forEach(b => {
-      const x = modelById(b.dataset.v);
-      b.classList.toggle('dl', !!(x && x.downloaded));
-      if (x) b.title = `${x.label}：${x.desc}（${fmtBytes(x.bytes)}${x.downloaded ? '，已下載' : '，需下載'}）`;
-    });
-    if (!m) { $('txModelHint').textContent = '越大越準也越慢'; return; }
-    $('txModelHint').textContent = m.downloaded ? `${m.label} · ${m.desc} · 已下載`
+    const m = modelById(recog.v.model);
+    const hint = !m ? '越大越準也越慢'
+      : m.downloaded ? `${m.label} · ${m.desc} · 已下載`
       : m.downloading ? `${m.label} · 下載中 ${Math.round(m.downloading.done / m.bytes * 100)}%`
       : `${m.label} · ${m.desc} · 第一次使用需下載 ${fmtBytes(m.bytes)}`;
+    for (const f of recog.forms) {
+      f.el('Model').querySelectorAll('button[data-v]').forEach(b => {
+        const x = modelById(b.dataset.v);
+        b.classList.toggle('dl', !!(x && x.downloaded));
+        if (x) b.title = `${x.label}：${x.desc}（${fmtBytes(x.bytes)}${x.downloaded ? '，已下載' : '，需下載'}）`;
+      });
+      f.el('ModelHint').textContent = hint;
+    }
   }
+
+  // ---------- 辨識設定（共用元件：逐字稿轉檔頁內嵌一份，字幕編輯器用彈窗開一份） ----------
+  const LANGS = [['', '自動偵測'], ['zh', '中文'], ['en', '英文'], ['ja', '日文'], ['ko', '韓文']];
+  const DEVICES = [['auto', '自動'], ['cuda', 'GPU（CUDA）'], ['cpu', 'CPU']];
+  const opts = list => list.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+  function recogMarkup(px) {
+    return `
+      <div class="row"><label class="lbl" id="${px}ModelLbl">模型</label><div class="inline">
+        <div class="seg" id="${px}Model" role="radiogroup" aria-labelledby="${px}ModelLbl">${RECOG_MODELS.map(([v, l]) => `<button type="button" data-v="${v}" role="radio">${l}</button>`).join('')}</div>
+        <span class="hint" id="${px}ModelHint">越大越準也越慢</span>
+        <button id="${px}ModelsLink" class="btn sm ghost" type="button">管理模型</button>
+      </div></div>
+      <div class="row"><label class="lbl" for="${px}Lang">語言</label><div class="inline">
+        <select id="${px}Lang" class="field">${opts(LANGS)}</select>
+        <label class="lbl" for="${px}Device">運算</label>
+        <select id="${px}Device" class="field">${opts(DEVICES)}</select>
+        <span id="${px}DeviceNote" class="device-note" role="status"></span>
+      </div></div>
+      <div class="row"><label class="lbl" for="${px}Tw">台灣用語</label><div class="inline">
+        <label class="switch"><input type="checkbox" id="${px}Tw"><span></span></label>
+        <span class="hint">簡體轉繁體，並換成台灣慣用語</span>
+      </div></div>
+      <div class="row"><label class="lbl" for="${px}Gloss">我的詞庫</label><div class="inline">
+        <label class="switch"><input type="checkbox" id="${px}Gloss"><span></span></label>
+        <span class="hint" id="${px}GlossHint">辨識時優先採用字幕編輯器「詞庫」裡的詞</span>
+      </div></div>`;
+  }
+  function mountRecog(box, px) {
+    box.innerHTML = recogMarkup(px);
+    const f = { box, px, el: id => box.querySelector('#' + px + id) };
+    f.el('Model').onclick = e => { const b = e.target.closest('button[data-v]'); if (b && !b.disabled) setRecog({ model: b.dataset.v }); };
+    f.el('Model').onkeydown = e => {          // radiogroup：左右鍵切換
+      if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+      e.preventDefault();
+      const ids = RECOG_MODELS.map(m => m[0]);
+      const k = (ids.indexOf(recog.v.model) + (e.key === 'ArrowRight' ? 1 : ids.length - 1)) % ids.length;
+      setRecog({ model: ids[k] });
+      f.el('Model').querySelector(`[data-v="${ids[k]}"]`).focus();
+    };
+    f.el('Lang').onchange = e => setRecog({ lang: e.target.value });
+    f.el('Device').onchange = e => setRecog({ device: e.target.value });
+    f.el('Tw').onchange = e => setRecog({ to_tw: e.target.checked });
+    f.el('Gloss').onchange = e => setRecog({ use_glossary: e.target.checked });
+    f.el('ModelsLink').onclick = () => { closePanel(); showView('models'); };
+    recog.forms.add(f);
+    syncRecog();
+    refreshGlossCount();
+    return f;
+  }
+  const modelShort = id => (RECOG_MODELS.find(m => m[0] === id) || [id, id])[1];
+  function setRecog(patch) {
+    Object.assign(recog.v, patch);
+    syncRecog();
+    if (tx && tx.set_setting) Promise.resolve(tx.set_setting('recog', recog.v)).then(r => { if (r && r.error) toast(r.error); });
+  }
+  function syncRecog() {
+    for (const f of recog.forms) {
+      f.el('Model').querySelectorAll('button[data-v]').forEach(b => {
+        const on = b.dataset.v === recog.v.model;
+        b.classList.toggle('on', on); b.setAttribute('aria-checked', on); b.tabIndex = on ? 0 : -1;
+      });
+      f.el('Lang').value = recog.v.lang; f.el('Device').value = recog.v.device;
+      f.el('Tw').checked = !!recog.v.to_tw; f.el('Gloss').checked = !!recog.v.use_glossary;
+      const n = recog.gloss;
+      f.el('GlossHint').textContent = n == null ? '辨識時優先採用字幕編輯器「詞庫」裡的詞'
+        : n ? `辨識時優先採用字幕編輯器「詞庫」裡的 ${n} 個詞` : '詞庫是空的：在字幕編輯器按「詞庫」加入專有名詞';
+    }
+    const lbl = document.getElementById('recogLabel');
+    if (lbl) lbl.textContent = modelShort(recog.v.model);
+    renderModelHint(); renderDevice();
+  }
+  async function refreshGlossCount() {
+    const fn = (tx && tx.glossary_list) || (api && api.glossary_list);
+    if (!fn) return;
+    try { const w = await fn(); recog.gloss = (w || []).length; } catch (e) { return; }
+    syncRecog();
+  }
+  function openRecogPanel() {
+    const modal = $('modal'), back = $('modalBack');
+    modal.innerHTML = '';
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'recogTitle');
+    const h = Object.assign(document.createElement('h2'), { id: 'recogTitle', textContent: '辨識設定' });
+    const p = Object.assign(document.createElement('p'), { className: 'muted', textContent: '逐字稿轉檔與字幕編輯器共用這份設定，改一邊另一邊也會跟著改。' });
+    const box = Object.assign(document.createElement('div'), { className: 'recog in-modal' });
+    const actions = Object.assign(document.createElement('div'), { className: 'actions' });
+    const close = Object.assign(document.createElement('button'), { className: 'btn primary', textContent: '完成' });
+    close.onclick = closePanel;
+    actions.append(close);
+    modal.append(h, p, box, actions);
+    const f = mountRecog(box, 'ed');
+    panelCleanup = () => recog.forms.delete(f);
+    back.classList.remove('hidden');
+    document.addEventListener('keydown', panelKey, true);
+    f.el('Model').querySelector('.on').focus();
+  }
+  window.__asRecog = { get: () => ({ ...recog.v }), open: openRecogPanel };
 
   function bindModels() {
     $('mdOpen').onclick = () => tx.open_models_folder();
-    $('txModelsLink').onclick = () => showView('models');
   }
 
   // ---------- 關於與更新 ----------
@@ -302,7 +422,12 @@
     return r;
   }
 
-  function closePanel() { $('modalBack').classList.add('hidden'); document.removeEventListener('keydown', panelKey, true); }
+  let panelCleanup = null;
+  function closePanel() {
+    $('modalBack').classList.add('hidden');
+    document.removeEventListener('keydown', panelKey, true);
+    if (panelCleanup) { panelCleanup(); panelCleanup = null; }
+  }
   function panelKey(e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePanel(); } }
 
   async function showAbout() {
@@ -369,13 +494,14 @@
 
   // ---------- 拖放檔案 ----------
   // 完整路徑只有 pywebview 在 Python 端拿得到（gui.py on_drop → window.__asDrop）；這裡只處理畫面與路由
-  window.__asDrop = paths => {
-    const p = Array.isArray(paths) ? paths[0] : paths;
-    if (!p) return;
+  window.__asDrop = async paths => {
+    const list = Array.isArray(paths) ? paths : [paths];
+    if (!list.length || !list[0]) return;
     const view = VIEWS.find(v => !$('view-' + v).classList.contains('hidden'));
-    if (view === 'transcribe') { setFile(p); toast('已選好：' + basename(p)); }
-    else if (view === 'editor' && window.__asEditorDrop) window.__asEditorDrop(p);
-    else { showView('transcribe'); setFile(p); toast('已選好：' + basename(p)); }
+    if (view === 'editor' && window.__asEditorDrop) { window.__asEditorDrop(list[0]); return; }
+    if (view !== 'transcribe') showView('transcribe');
+    if (st.running) { toast('轉檔進行中，完成後再加入檔案'); return; }
+    addFiles(await tx.tx_expand(list));
   };
   (function bindDrop() {
     let depth = 0;
@@ -424,11 +550,68 @@
   // ---------- 逐字稿轉檔 ----------
   const basename = p => (p || '').split(/[\\/]/).pop();
 
-  function setFile(p) {
-    st.file = p || null;
-    $('txFileName').textContent = p ? basename(p) : '還沒選擇檔案';
-    $('txFilePath').textContent = p ? p : '支援 mp4、mov、mkv、webm、mp3、wav、m4a、flac';
-    if (!st.running) setStatus(p ? '按「開始轉檔」' : '選一個影音檔開始');
+  const STATE_TEXT = { pending: '等待中', running: '辨識中', done: '完成', error: '失敗', cancelled: '已取消' };
+  // 加入檔案（已在清單的略過）；轉檔結束後再加檔，就開始一份新的佇列
+  function addFiles(list, replace) {
+    list = (list || []).filter(Boolean);
+    if (!list.length) { toast('沒有找到可以轉檔的影音檔'); return; }
+    if (st.queue && !st.running) { st.files = []; st.queue = null; }
+    const merged = replace ? [] : [...st.files];
+    let added = 0;
+    for (const p of list) if (!merged.some(x => x.toLowerCase() === p.toLowerCase())) { merged.push(p); added++; }
+    if (merged.length > 200) toast('一次最多 200 個檔案，多的已略過');
+    st.files = merged.slice(0, 200);
+    renderFiles();
+    if (list.length > 1 || st.files.length > 1) toast(added ? `已加入 ${added} 個檔案，共 ${st.files.length} 個` : '這些檔案已經在清單裡了');
+    else toast('已選好：' + basename(list[0]));
+  }
+  function removeFile(i) { st.files.splice(i, 1); st.queue = null; renderFiles(); }
+  function renderFiles() {
+    const n = st.files.length, many = n > 1;
+    $('txFileName').textContent = n === 0 ? '還沒選擇檔案' : many ? `${n} 個檔案` : basename(st.files[0]);
+    $('txFilePath').textContent = n === 0 ? '支援 mp4、mov、mkv、webm、mp3、wav、m4a、flac；可以多選或拖入資料夾'
+      : many ? '依序辨識，每個檔案各自輸出三種檔案' : st.files[0];
+    for (const id of ['txStart', 'txEnd']) $(id).disabled = st.running || many;
+    $('txRangeRow').classList.toggle('dim', many);
+    $('txRangeHint').textContent = many ? '多個檔案時一律轉整支' : '留空＝整支；格式如 13:00、1:02:03、780';
+    $('txStartBtn').textContent = many ? `開始轉檔（${n} 個）` : '開始轉檔';
+    const box = $('txQueue');
+    box.classList.toggle('hidden', !many);
+    box.innerHTML = '';
+    if (!many) { if (!st.running) setStatus(n ? '按「開始轉檔」' : '選一個影音檔開始'); return; }
+    st.files.forEach((p, i) => {
+      const q = st.queue && st.queue[i];
+      const state = q ? q.state : 'pending';
+      const row = Object.assign(document.createElement('div'), { className: `q-row ${state}${st.view === i ? ' viewing' : ''}` });
+      row.setAttribute('role', 'listitem');
+      const main = Object.assign(document.createElement('button'), { type: 'button', className: 'q-main', disabled: state !== 'done' });
+      main.title = state === 'done' ? '查看這個檔案的逐字稿' : p;
+      main.append(Object.assign(document.createElement('b'), { textContent: basename(p) }),
+                  Object.assign(document.createElement('span'), { className: 'muted', textContent: q && (q.summary || q.error) || p }));
+      main.onclick = () => showItem(i);
+      let label = STATE_TEXT[state];
+      if (state === 'running' && st.running) label = st.curPct != null ? `辨識中 ${st.curPct}%` : '準備中';
+      const badge = Object.assign(document.createElement('span'), { className: 'q-badge ' + state, textContent: label });
+      if (q && q.error) badge.title = q.error;
+      row.append(main, badge);
+      if (!st.running) {
+        const del = Object.assign(document.createElement('button'), { type: 'button', className: 'q-del', textContent: '×', title: '從清單移除' });
+        del.setAttribute('aria-label', `移除 ${basename(p)}`);
+        del.onclick = () => removeFile(i);
+        row.append(del);
+      }
+      box.append(row);
+    });
+    if (!st.running && !st.queue) setStatus(`按「開始轉檔」，${n} 個檔案會依序辨識`);
+  }
+  async function showItem(i) {
+    const res = await tx.tx_result(i);
+    if (!res) return;
+    st.view = i;
+    renderResult(res);
+    renderFiles();
+    $('txResult').classList.remove('hidden');
+    showTab('text');
   }
   function setGlossary(p) {
     st.glossary = p || null;
@@ -441,7 +624,7 @@
   const ltr = p => (p ? `\u200E${p}\u200E` : '');   // rtl 截斷時保持路徑原本的順序
   function setOutdir(p) { st.outdir = p || ''; $('txOutdir').textContent = ltr(p); $('txOutdir').title = p || ''; }
   function setStatus(text, kind) {
-    $('txStatus').textContent = text;
+    $('txStatus').textContent = (st.head || '') + text;
     const line = $('txStatus').parentElement;
     line.classList.toggle('err', kind === 'err');
     line.classList.toggle('ok', kind === 'ok');
@@ -451,9 +634,11 @@
     $('txStartBtn').classList.toggle('hidden', on);
     $('txCancelBtn').classList.toggle('hidden', !on);
     $('txCancelBtn').disabled = false;
-    for (const id of ['txPick', 'txPickGlossary', 'txPickOutdir', 'txClearGlossary', 'txStart', 'txEnd', 'txLang', 'txDevice', 'txTw'])
+    for (const id of ['txPick', 'txPickFolder', 'txPickGlossary', 'txPickOutdir', 'txClearGlossary'])
       $(id).disabled = on;
-    $('txModel').querySelectorAll('button').forEach(b => { b.disabled = on; });
+    // 轉檔中鎖住本頁的辨識設定（顯示的就是正在跑的設定）；編輯器那份彈窗不受影響
+    $('txRecog').querySelectorAll('button, select, input').forEach(b => { b.disabled = on; });
+    renderFiles();
   }
   function showTab(t) {
     $('txTabs').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
@@ -467,9 +652,10 @@
 
   async function start() {
     if (st.running) return;
-    if (!st.file) { toast('請先選一個影音檔'); $('txPick').focus(); return; }
+    if (!st.files.length) { toast('請先選一個影音檔'); $('txPick').focus(); return; }
+    if (st.queue) { st.queue = null; }      // 再按一次開始＝把同一份清單重跑
     if (plannedDevice().device === null) { toast('這台電腦目前無法使用 GPU：' + (st.compute ? st.compute.reason : '')); return; }
-    const mm = modelById(st.model);
+    const mm = modelById(recog.v.model);
     if (mm && !mm.downloaded && !mm.downloading) {
       const ok = await confirmDialog({
         title: `第一次使用「${mm.label}」模型`,
@@ -480,13 +666,13 @@
     }
     st.dlSeen = false;
     const params = {
-      src: st.file, start: $('txStart').value, end: $('txEnd').value, model: st.model,
-      lang: $('txLang').value, device: $('txDevice').value, to_tw: $('txTw').checked,
+      files: st.files, start: $('txStart').value, end: $('txEnd').value, ...recog.v,
       glossary: st.glossary, outdir: st.outdir,
     };
     const r = await tx.tx_start(params);
     if (!r || r.error) { toast(r ? r.error : '無法開始'); return; }
-    st.result = null; st.text = '';
+    st.result = null; st.text = ''; st.view = null; st.curPct = null;
+    st.queue = st.files.map(() => ({ state: 'pending' }));
     $('txResult').classList.remove('hidden');
     $('txFiles').classList.add('hidden'); $('txFiles').innerHTML = '';
     $('txText').innerHTML = ''; $('txLog').textContent = '';
@@ -512,6 +698,13 @@
     if (logEl.textContent !== text) { logEl.textContent = text; if (atBottom) logEl.scrollTop = logEl.scrollHeight; }
     $('txElapsed').textContent = j.state === 'idle' ? '' : fmtElapsed(j.elapsed);
     if (j.device) showUsedDevice(j.device);
+    const many = (j.queue || []).length > 1;
+    const head = many ? `[${(j.index || 0) + 1}/${j.queue.length}] ` : '';
+    if (j.queue && j.queue.length) {
+      const pct = j.stage === 'transcribe' ? Math.round(j.progress * 100) : null;
+      const key = JSON.stringify([j.queue.map(q => q.state + (q.summary || q.error || '')), pct]);
+      if (key !== st.qKey) { st.qKey = key; st.queue = j.queue; st.curPct = pct; if (many) renderFiles(); }
+    }
 
     if (j.state === 'running' || j.state === 'cancelling') {
       const bar = (frac) => {
@@ -520,7 +713,8 @@
         $('txFill').style.width = `${(frac * 100).toFixed(1)}%`;
       };
       const eta = fmtEta(j.eta);
-      if (j.state === 'cancelling') { bar(null); setStatus(j.status || '取消中…'); }
+      st.head = head;                                  // 多檔時狀態列前面標上第幾個
+      if (j.state === 'cancelling') { bar(null); st.head = ''; setStatus(j.status || '取消中…'); }
       else if (j.stage === 'download' && j.download) {
         const d = j.download, m = modelById(d.model);
         bar(d.done ? d.done / d.total : null);
@@ -542,15 +736,22 @@
     setRunning(false);
     renderDevice();
     refreshModels();
+    st.head = '';
+    st.queue = j.queue || st.queue;
+    renderFiles();
     if (j.state === 'done') {
       $('txFill').style.width = '100%';
-      const res = await tx.tx_result();
+      const first = many ? (j.queue || []).findIndex(q => q.state === 'done') : null;
+      const res = await tx.tx_result(first);
+      st.view = many ? first : null;
       renderResult(res);
-      setStatus(res && res.summary ? res.summary : '完成', 'ok');
-      showTab('text');
+      renderFiles();
+      setStatus(many ? j.summary : (res && res.summary ? res.summary : '完成'), 'ok');
+      showTab(many && (j.queue || []).some(q => q.state === 'error') ? 'log' : 'text');
+      if (many) toast(j.summary + '。點清單裡的檔案可以查看各自的逐字稿');
     } else if (j.state === 'cancelled') {
       $('txFill').style.width = '0%';
-      setStatus('已取消');
+      setStatus(j.status || '已取消');
       toast('已取消轉檔');
     } else if (j.state === 'error') {
       $('txFill').style.width = '0%';
@@ -561,6 +762,7 @@
 
   function renderResult(res) {
     st.result = res || null;
+    $('txResultName').textContent = res && res.name && st.files.length > 1 ? res.name : '';
     st.text = res ? res.text || '' : '';
     const files = $('txFiles');
     files.innerHTML = '';
@@ -603,20 +805,14 @@
 
   function bindTranscribe(info) {
     setOutdir(info.outdir || '');
-    setFile(null); setGlossary(null);
+    mountRecog($('txRecog'), 'tx');
+    renderFiles(); setGlossary(null);
 
-    $('txPick').onclick = async () => { const p = await tx.tx_pick_media(); if (p) setFile(p); };
+    $('txPick').onclick = async () => { const p = await tx.tx_pick_media(); if (p) addFiles(Array.isArray(p) ? p : [p]); };
+    $('txPickFolder').onclick = async () => { const p = await tx.tx_pick_folder(); if (p) addFiles(p); };
     $('txPickGlossary').onclick = async () => { const p = await tx.tx_pick_glossary(); if (p) setGlossary(p); };
     $('txClearGlossary').onclick = () => setGlossary(null);
     $('txPickOutdir').onclick = async () => { const p = await tx.tx_pick_outdir(); if (p) setOutdir(p); };
-    $('txModel').onclick = e => {
-      const b = e.target.closest('button[data-v]');
-      if (!b || b.disabled) return;
-      st.model = b.dataset.v;
-      $('txModel').querySelectorAll('button').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', x === b); });
-      renderModelHint();
-    };
-    $('txModel').querySelectorAll('button').forEach(x => x.setAttribute('aria-checked', x.classList.contains('on')));
     $('txTabs').onclick = e => { const b = e.target.closest('button[data-t]'); if (b) showTab(b.dataset.t); };
     $('txStartBtn').onclick = start;
     $('txCancelBtn').onclick = async () => { $('txCancelBtn').disabled = true; setStatus('取消中…'); await tx.tx_cancel(); };
@@ -627,7 +823,7 @@
     $('txOpenOut').onclick = () => tx.open_folder((st.result && st.result.outdir) || st.outdir);
     $('txToEditor').onclick = async () => {
       if (!tx.tx_to_project) { toast('瀏覽器預覽模式不支援'); return; }
-      const r = await tx.tx_to_project();
+      const r = await tx.tx_to_project(st.view);
       if (!r || r.error) { toast((r && r.error) || '無法建立專案'); return; }
       showView('editor');
       if (window.__asOpenProject) await window.__asOpenProject(r.name);
@@ -642,6 +838,7 @@
     tx = (api && typeof api.tx_start === 'function') ? api : txMock;
     let info = {};
     try { info = (await tx.get_info()) || {}; } catch (e) { info = {}; }
+    if (info.settings && info.settings.recog) Object.assign(recog.v, info.settings.recog);
     bindTranscribe(info);
     bindModels();
     refreshModels();
@@ -650,8 +847,7 @@
     setTimeout(() => checkUpdate(false), 3000);   // 每天最多一次，可在「關於」關閉
     $('appVersion').textContent = info.version && info.version !== '0.0.0-dev' ? `v${info.version}` : (info.version ? '開發版' : '');
     st.compute = info.compute || null;
-    $('txDevice').addEventListener('change', renderDevice);
-    renderDevice();
+    syncRecog();
 
     document.querySelectorAll('.nav-item[data-view]').forEach(b => { b.onclick = () => showView(b.dataset.view); });
     $('navOutput').onclick = () => tx.open_folder(st.outdir || '');

@@ -201,7 +201,13 @@ class Api:
                 'name': Path(r[0]).stem}
 
     # ----- 辨識（背景執行，前端輪詢 get_job）-----
-    def start_transcribe(self, name, model_size='small'):
+    def start_transcribe(self, name, opts=None):
+        """opts：與逐字稿轉檔共用的辨識設定 {model, device, lang, to_tw, use_glossary}；
+        舊版前端只傳模型名稱字串。"""
+        from engine import appinfo
+        if isinstance(opts, str):
+            opts = {**appinfo.load_settings()['recog'], 'model': opts}
+        opts = appinfo.clean_recog(opts or appinfo.load_settings()['recog'])
         if self._job['state'] == 'running':
             return {'error': '已有辨識進行中'}
         data = self.store.load(name)
@@ -239,12 +245,16 @@ class Api:
         def run():
             try:
                 r = transcriber.transcribe(
-                    data['media'], model_size=model_size, device='auto',
-                    glossary_words=self.glossary.words,
+                    data['media'], model_size=opts['model'], device=opts['device'],
+                    lang=opts['lang'] or None, to_taiwan=opts['to_tw'],
+                    glossary_words=self.glossary.words if opts['use_glossary'] else None,
                     progress=on_prog, on_stage=on_stage,
                     on_model=lambda info: self._job.update(device=info))
                 # 辨識期間使用者可能改了樣式或切點：重新載入最新內容，只更新字幕與語言
-                latest = self.store.load(name) or data
+                latest = self.store.load(name)
+                if latest is None:                     # 辨識期間專案被刪掉了：不要把它寫回來
+                    self._job.update(state='cancelled', status='專案已刪除')
+                    return
                 latest['cues'] = r['cues']
                 latest['language'] = r['language']
                 self.store.save(name, latest)

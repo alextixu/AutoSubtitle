@@ -74,66 +74,30 @@
               <b id="txFileName">還沒選擇檔案</b>
               <span id="txFilePath" class="muted">支援 mp4、mov、mkv、webm、mp3、wav、m4a、flac</span>
             </div>
-            <button id="txPick" class="btn">選擇影音檔</button>
+            <div class="file-btns">
+              <button id="txPickFolder" class="btn ghost" title="把資料夾裡所有影音檔加進佇列（含子資料夾）">加入資料夾</button>
+              <button id="txPick" class="btn" title="可以一次選多個檔案，依序轉檔">選擇影音檔</button>
+            </div>
           </div>
-          <div class="row">
+          <div id="txQueue" class="queue hidden" role="list" aria-label="待轉檔案"></div>
+          <div class="row" id="txRangeRow">
             <label class="lbl">只轉其中一段</label>
             <div class="inline">
               <span class="muted">從</span>
               <input id="txStart" class="field xs" placeholder="0:00" spellcheck="false">
               <span class="muted">到</span>
               <input id="txEnd" class="field xs" placeholder="結尾" spellcheck="false">
-              <span class="hint">留空＝整支；格式如 13:00、1:02:03、780</span>
+              <span class="hint" id="txRangeHint">留空＝整支；格式如 13:00、1:02:03、780</span>
             </div>
           </div>
         </div>
 
         <div class="card">
+          <div id="txRecog" class="recog"></div>
           <div class="row">
-            <label class="lbl">模型</label>
-            <div class="inline">
-              <div class="seg" id="txModel" role="radiogroup" aria-label="模型">
-                <button data-v="tiny" role="radio">tiny</button>
-                <button data-v="base" role="radio">base</button>
-                <button data-v="small" role="radio" class="on">small</button>
-                <button data-v="medium" role="radio">medium</button>
-                <button data-v="large-v3-turbo" role="radio" title="large-v3-turbo：接近 large 的準確度，速度接近 medium">turbo</button>
-                <button data-v="large-v3" role="radio">large</button>
-              </div>
-              <span class="hint" id="txModelHint">越大越準也越慢</span>
-              <button id="txModelsLink" class="btn sm ghost" type="button">管理模型</button>
-            </div>
-          </div>
-          <div class="row">
-            <label class="lbl" for="txLang">語言</label>
-            <div class="inline">
-              <select id="txLang" class="field">
-                <option value="">自動偵測</option>
-                <option value="zh">中文</option>
-                <option value="en">英文</option>
-                <option value="ja">日文</option>
-                <option value="ko">韓文</option>
-              </select>
-              <label class="lbl" for="txDevice">運算</label>
-              <select id="txDevice" class="field">
-                <option value="auto">自動</option>
-                <option value="cuda">GPU（CUDA）</option>
-                <option value="cpu">CPU</option>
-              </select>
-              <span id="txDeviceNote" class="device-note"></span>
-            </div>
-          </div>
-          <div class="row">
-            <label class="lbl" for="txTw">台灣用語</label>
-            <div class="inline">
-              <label class="switch"><input type="checkbox" id="txTw" checked><span></span></label>
-              <span class="hint">簡體轉繁體，並換成台灣慣用語</span>
-            </div>
-          </div>
-          <div class="row">
-            <label class="lbl">詞庫檔</label>
+            <label class="lbl">另加詞庫檔</label>
             <div class="path">
-              <span id="txGlossary" class="path-text muted">選填：純文字檔，一行一個專有名詞，辨識時優先採用</span>
+              <span id="txGlossary" class="path-text muted">選填：純文字檔，一行一個專有名詞</span>
               <button id="txClearGlossary" class="btn sm ghost hidden">清除</button>
               <button id="txPickGlossary" class="btn sm">選擇</button>
             </div>
@@ -160,6 +124,7 @@
 
         <div id="txResult" class="card hidden">
           <div class="card-head">
+            <span id="txResultName" class="result-name"></span>
             <div class="seg sm" id="txTabs">
               <button data-t="text" class="on">逐字稿</button>
               <button data-t="log">紀錄</button>
@@ -210,6 +175,7 @@
           <button id="npPick" class="btn">選擇影音檔</button>
           <span id="npFile" class="np-file">或把影音檔拖進視窗</span>
           <input id="npName" class="field" placeholder="專案名稱（選檔後自動帶入）">
+          <label class="ctl" title="建立後直接用目前的辨識設定開始辨識"><input type="checkbox" id="npAuto" checked> 建立後立即辨識</label>
           <button id="npCreate" class="btn primary">建立專案</button>
         </div>
         <div id="projList" class="proj-list"></div>
@@ -220,14 +186,7 @@
           <button id="btnBack" class="btn ghost">‹ 專案</button>
           <span id="projTitle" class="proj-title"></span>
           <div class="tb-group">
-            <select id="modelSize" class="field" title="模型大小">
-              <option value="tiny">tiny（最快）</option>
-              <option value="base">base</option>
-              <option value="small" selected>small（推薦）</option>
-              <option value="medium">medium（更準）</option>
-              <option value="large-v3-turbo">turbo（接近 large、速度接近 medium）</option>
-              <option value="large-v3">large-v3（最準，建議 GPU）</option>
-            </select>
+            <button id="btnRecog" class="btn" title="辨識設定：模型、語言、運算裝置（與逐字稿轉檔共用）">模型 <b id="recogLabel">small</b></button>
             <button id="btnTranscribe" class="btn primary">開始辨識</button>
             <button id="btnCancelJob" class="btn hidden">取消</button>
             <div id="jobBar" class="job-bar hidden"><div id="jobFill"></div></div>

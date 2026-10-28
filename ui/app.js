@@ -292,7 +292,8 @@ async function createProject() {
   const r = await api.create_project(name, pickedMedia);
   if (r && r.error) { toast(r.error); return; }
   $('npName').value = ''; pickedMedia = null; $('npFile').textContent = '';
-  openProject(name);
+  await openProject(name);
+  if ($('npAuto').checked) startTranscribe();
 }
 
 // 拖入檔案（由 shell.js / 後端轉來）：在專案列表就當作選好檔案並自動命名
@@ -340,13 +341,15 @@ async function startTranscribe() {
     if (!ok) return;
   }
   await save.flush();
-  const r = await api.start_transcribe(state.name, $('modelSize').value);
+  const opts = window.__asRecog ? window.__asRecog.get() : 'small';   // 與逐字稿轉檔共用的設定
+  const r = await api.start_transcribe(state.name, opts);
   if (r.error) { toast(r.error); return; }
   const before = snapshot();
+  const proj = state.name;                 // 辨識期間使用者可能回到專案列表或換專案
   $('jobBar').classList.remove('hidden');
   $('btnTranscribe').classList.add('hidden');
   $('btnCancelJob').classList.remove('hidden');
-  $('modelSize').disabled = true;
+  $('btnRecog').disabled = true;
   const sc = window.__asCompute;
   const devChip = $('jobDevice');
   const devName = j => (j.device ? (sc ? sc.shortDev(j.device.device_label) : j.device.device_label) : '');
@@ -354,7 +357,7 @@ async function startTranscribe() {
     clearInterval(jobPoll); jobPoll = null;
     $('jobBar').classList.add('hidden'); $('jobStatus').classList.add('hidden'); devChip.classList.add('hidden');
     $('btnTranscribe').classList.remove('hidden'); $('btnCancelJob').classList.add('hidden');
-    $('modelSize').disabled = false;
+    $('btnRecog').disabled = false;
     if (sc && !sc.isRunning()) sc.renderDevice();
   };
   jobPoll = setInterval(async () => {
@@ -369,7 +372,8 @@ async function startTranscribe() {
     }
     if (j.state === 'done') {
       const used = devName(j); finish();
-      const d = await api.open_project(state.name);
+      if (state.name !== proj) { toast(`「${proj}」辨識完成，打開專案就能看到字幕`); return; }
+      const d = await api.open_project(proj);
       history.past.push({ label: '辨識', snap: before });
       history.future.length = 0;
       state.cues = normalizeCues(d.cues || []);
@@ -1474,6 +1478,7 @@ function setupHotkeys() {
   $('npName').onkeydown = e => { if (e.key === 'Enter') createProject(); };
   $('btnBack').onclick = () => { if (state.editing >= 0) commitEdit(); state.name = null; showHome(); };
   $('btnTranscribe').onclick = startTranscribe;
+  $('btnRecog').onclick = () => window.__asRecog && window.__asRecog.open();
   $('btnCancelJob').onclick = cancelTranscribe;
   $('btnScenes').onclick = async () => {
     toast('偵測切點中…');

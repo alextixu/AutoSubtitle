@@ -31,7 +31,9 @@ from transcribe import fmt_clock, output_stem, parse_time, write_outputs   # noq
 APP_NAME = 'AutoSubtitle'
 APP_TITLE = 'AutoSubtitle 字幕工房'
 DEFAULT_OUTDIR = OUTPUT_DIR
-MEDIA_FILTER = '影音檔 (*.mp4;*.mov;*.mkv;*.webm;*.avi;*.mp3;*.wav;*.m4a;*.aac;*.flac)'
+MEDIA_EXTS = ('.mp4', '.mov', '.mkv', '.webm', '.avi', '.mp3', '.wav', '.m4a', '.aac', '.flac')
+MEDIA_FILTER = '影音檔 (' + ';'.join('*' + e for e in MEDIA_EXTS) + ')'
+MAX_QUEUE = 200  # 一次最多排幾個檔案
 ALL_FILTER = '所有檔案 (*.*)'
 MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo', 'large-v3']
 LOG_KEEP = 300  # 紀錄最多保留的行數
@@ -67,7 +69,8 @@ class _JobWriter:
 
 
 class TranscribeJob:
-    """一次逐字稿轉檔工作：背景執行緒跑辨識，前端用 tx_poll 輪詢。"""
+    """逐字稿轉檔工作佇列：背景執行緒依序辨識一個或多個檔案，前端用 tx_poll 輪詢。
+    頂層的 progress／stage／device 描述「目前這一個檔案」，queue 列出每個檔案的狀態。"""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -77,15 +80,21 @@ class TranscribeJob:
 
     def reset(self):
         self.state = 'idle'        # idle / running / cancelling / done / cancelled / error
-        self.progress = 0.0
-        self.status_text = ''
         self.logs: list[str] = []
         self.error: str | None = None
-        self.result: dict | None = None
+        self.result: dict | None = None   # 最近一個完成的檔案
+        self.summary: str | None = None
         self.t0 = 0.0
         self.elapsed = 0.0
+        self.queue: list[dict] = []
+        self.index = 0
+        self._reset_item()
+
+    def _reset_item(self):
+        self.progress = 0.0
+        self.status_text = ''
         self.device: dict | None = None   # 實際使用的運算裝置（模型載入後才知道）
-        self.stage = ''                   # download / decode / load / transcribe
+        self.stage = ''                   # wait / download / decode / load / transcribe
         self.stage_frac: float | None = None
         self.download: dict | None = None # {model, done, total, speed}
         self.recog_t0 = 0.0
@@ -103,6 +112,14 @@ class TranscribeJob:
         with self.lock:
             self.status_text = text
 
+    def item(self, i: int | None = None) -> dict | None:
+        """第 i 個檔案（None＝最近一個完成的）"""
+        with self.lock:
+            if i is None:
+                done = [x for x in self.queue if x['state'] == 'done']
+                return done[-1] if done else None
+            return self.queue[i] if 0 <= i < len(self.queue) else None
+
     def snapshot(self) -> dict:
         with self.lock:
             elapsed = self.elapsed if self.state not in ('running', 'cancelling') else time.time() - self.t0
@@ -113,26 +130,27 @@ class TranscribeJob:
             elif self.stage == 'download' and self.download and self.download.get('speed'):
                 d = self.download
                 eta = round(max(d['total'] - d['done'], 0) / d['speed'])
+            queue = [{'name': x['name'], 'src': x['src'], 'state': x['state'],
+                      'summary': x['summary'], 'error': x['error']} for x in self.queue]
             return {'state': self.state, 'progress': self.progress, 'status': self.status_text,
                     'logs': list(self.logs), 'error': self.error, 'elapsed': round(elapsed, 1),
-                    'summary': (self.result or {}).get('summary'), 'device': self.device,
+                    'summary': self.summary, 'device': self.device,
                     'stage': self.stage, 'stage_frac': self.stage_frac,
-                    'download': self.download, 'eta': eta}
+                    'download': self.download, 'eta': eta,
+                    'queue': queue, 'index': self.index}
 
-    def start(self, p: dict):
+    def start(self, ps: list[dict]):
         self.reset()
         self.cancel.clear()
         self.state = 'running'
         self.t0 = time.time()
-        span = ''
-        if p['start'] or p['end'] is not None:
-            end = fmt_clock(p['end']) if p['end'] is not None else '結尾'
-            span = f'，範圍 {fmt_clock(p["start"])} ~ {end}'
-        self.log(f'辨識 {p["src"].name}（模型 {p["model"]}{span}）')
-        if p['words']:
-            self.log(f'詞庫載入 {len(p["words"])} 個詞')
+        self.queue = [{'src': str(p['src']), 'name': p['src'].name, 'state': 'pending',
+                       'summary': None, 'error': None, 'result': None, 'full_cues': None}
+                      for p in ps]
+        if len(ps) > 1:
+            self.log(f'佇列共 {len(ps)} 個檔案，依序辨識。')
         self.status('準備中…')
-        self.thread = threading.Thread(target=self._work, args=(p,), daemon=True)
+        self.thread = threading.Thread(target=self._work, args=(ps,), daemon=True)
         self.thread.start()
 
     def request_cancel(self):
@@ -142,7 +160,51 @@ class TranscribeJob:
                 self.state = 'cancelling'
                 self.status_text = '取消中…'
 
-    def _work(self, p: dict):
+    def _work(self, ps: list[dict]):
+        old_out, old_err = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = _JobWriter(self, 'log'), _JobWriter(self, 'status')
+        try:
+            for i, p in enumerate(ps):
+                if self.cancel.is_set():
+                    break
+                with self.lock:
+                    self.index = i
+                    self._reset_item()
+                    self.status_text = '準備中…'
+                    self.queue[i]['state'] = 'running'
+                self._work_one(p, self.queue[i], i, len(ps))
+        finally:
+            sys.stdout, sys.stderr = old_out, old_err
+            self._wrap_up()
+
+    def _wrap_up(self):
+        with self.lock:
+            for x in self.queue:
+                if x['state'] in ('pending', 'running'):
+                    x['state'] = 'cancelled'
+            ok = [x for x in self.queue if x['state'] == 'done']
+            bad = [x for x in self.queue if x['state'] == 'error']
+            self.elapsed = time.time() - self.t0
+            if self.cancel.is_set():
+                self.state = 'cancelled'
+                self.status_text = '已取消' + (f'（已完成 {len(ok)} 個檔案）' if ok and len(self.queue) > 1 else '')
+            elif len(self.queue) == 1:
+                x = self.queue[0]
+                self.state, self.error = x['state'], x['error']
+                self.summary = x['summary']
+                self.status_text = x['summary'] if ok else '失敗，詳見紀錄'
+            else:
+                self.state = 'done' if ok else 'error'
+                self.summary = (f'佇列完成：{len(ok)} 個成功' + (f'，{len(bad)} 個失敗' if bad else '')
+                                + f'，共耗時 {fmt_secs(self.elapsed)}')
+                self.error = None if ok else (bad[0]['error'] if bad else None)
+                self.status_text = self.summary
+        if self.state == 'cancelled':
+            self.log('已取消。')
+        elif len(self.queue) > 1:
+            self.log(self.summary)
+
+    def _work_one(self, p: dict, item: dict, i: int, n: int):
         def prog(x: float):
             if self.cancel.is_set():
                 raise Cancelled
@@ -153,8 +215,15 @@ class TranscribeJob:
                 self.progress = float(x)
                 self.stage_frac = float(x)
 
-        old_out, old_err = sys.stdout, sys.stderr
-        sys.stdout, sys.stderr = _JobWriter(self, 'log'), _JobWriter(self, 'status')
+        span = ''
+        if p['start'] or p['end'] is not None:
+            end = fmt_clock(p['end']) if p['end'] is not None else '結尾'
+            span = f'，範圍 {fmt_clock(p["start"])} ~ {end}'
+        head = f'[{i + 1}/{n}] ' if n > 1 else ''
+        self.log(f'{head}辨識 {p["src"].name}（模型 {p["model"]}{span}）')
+        if p['words'] and i == 0:
+            self.log(f'詞庫載入 {len(p["words"])} 個詞')
+        t0 = time.time()
         try:
             r = transcriber.transcribe(
                 str(p['src']), model_size=p['model'], device=p['device'], lang=p['lang'],
@@ -165,23 +234,22 @@ class TranscribeJob:
                 raise Cancelled
             p['outdir'].mkdir(parents=True, exist_ok=True)
             files = write_outputs(r['cues'], p['outdir'], output_stem(p['src'], p['start'], p['end']))
-            self._finish(r, files, p)
+            self._finish(r, files, p, item, time.time() - t0)
         except (Cancelled, models.DownloadCancelled):
             with self.lock:
-                self.state, self.elapsed = 'cancelled', time.time() - self.t0
-                self.status_text = '已取消'
-            self.log('已取消。')
+                item['state'] = 'cancelled'
         except Exception as e:  # noqa: BLE001
             if isinstance(e, RuntimeError) and self.stage == 'download':
                 msg = str(e)               # 下載錯誤已翻成人話（models.friendly_error）
+            elif type(e).__module__.startswith('av') or 'Invalid data' in str(e):
+                msg = '讀不到這個檔案：可能不是影音檔，或檔案已損毀'
+            elif isinstance(e, ValueError) and '音訊軌' in str(e):
+                msg = str(e)
             else:
                 msg = f'{type(e).__name__}: {e}'
             self.log('失敗：' + msg)
             with self.lock:
-                self.state, self.error, self.elapsed = 'error', msg, time.time() - self.t0
-                self.status_text = '失敗，詳見紀錄'
-        finally:
-            sys.stdout, sys.stderr = old_out, old_err
+                item['state'], item['error'] = 'error', msg
 
     def _on_stage(self, stage: str, frac, extra):
         if self.cancel.is_set():
@@ -211,33 +279,37 @@ class TranscribeJob:
             self.device = info
         self.log(f'運算裝置：{info["device_label"]}（{info["compute_type"]}），模型 {info["model"]}')
 
-    def _finish(self, r: dict, files: list[Path], p: dict):
+    def _finish(self, r: dict, files: list[Path], p: dict, item: dict, elapsed: float):
         cues = r['cues']
         used = r.get('model_used', p['model'])
         note = '' if used == p['model'] else f'，記憶體不足改用 {used} 模型'
-        elapsed = time.time() - self.t0
-        dev = r.get('device_label', '')
         # 裝置另外用標籤顯示，這裡不重複，避免狀態列被截斷
         summary = f'完成：{len(cues)} 句，語言 {r["language"]}，耗時 {elapsed:.0f} 秒{note}'
         self.log(summary)
         for f in files:
             self.log(f'輸出 {f}')
+        result = {
+            'cues': [{'start': c['start'], 'end': c['end'], 'text': c['text'],
+                      'clock': fmt_clock(c['start'])} for c in cues],
+            'files': [str(f) for f in files],
+            'outdir': str(p['outdir']),
+            'text': '\n'.join(c['text'] for c in cues),
+            'language': r['language'], 'model_used': used,
+            'elapsed': round(elapsed, 1), 'summary': summary,
+            'device_used': r.get('device_used'), 'device_label': r.get('device_label', ''),
+            'compute_type': r.get('compute_type'), 'name': p['src'].name,
+        }
         with self.lock:
-            self.progress, self.elapsed = 1.0, elapsed
-            self.full_cues = cues                 # 含詞級時間戳，給「用字幕編輯器打開」
-            self.src, self.style_offset = str(p['src']), p['start']
-            self.result = {
-                'cues': [{'start': c['start'], 'end': c['end'], 'text': c['text'],
-                          'clock': fmt_clock(c['start'])} for c in cues],
-                'files': [str(f) for f in files],
-                'outdir': str(p['outdir']),
-                'text': '\n'.join(c['text'] for c in cues),
-                'language': r['language'], 'model_used': used,
-                'elapsed': round(elapsed, 1), 'summary': summary,
-                'device_used': r.get('device_used'), 'device_label': dev,
-                'compute_type': r.get('compute_type'),
-            }
-            self.state, self.status_text = 'done', summary
+            self.progress = 1.0
+            item.update(state='done', summary=summary, result=result,
+                        full_cues=cues)   # 含詞級時間戳，給「用字幕編輯器打開」
+            self.result = result
+            self.status_text = summary
+
+
+def fmt_secs(s: float) -> str:
+    s = round(s)
+    return f'{s // 60} 分 {s % 60} 秒' if s >= 60 else f'{s} 秒'
 
 
 def open_folder(path: Path):
@@ -327,8 +399,34 @@ class Api(EditorApi):
         return r if isinstance(r, str) else r[0]
 
     def tx_pick_media(self):
+        """可多選；回傳路徑清單（沒選回 None）"""
         import webview
-        return self._dialog(webview.FileDialog.OPEN, file_types=(MEDIA_FILTER, ALL_FILTER))
+        r = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True,
+                                            file_types=(MEDIA_FILTER, ALL_FILTER))
+        if not r:
+            return None
+        return [r] if isinstance(r, str) else list(r)
+
+    def tx_pick_folder(self):
+        """選一個資料夾，回傳裡面所有影音檔（含子資料夾）"""
+        import webview
+        p = self._dialog(webview.FileDialog.FOLDER)
+        return self.tx_expand([p]) if p else None
+
+    def tx_expand(self, paths):
+        """把拖進來或選到的路徑展開成影音檔清單：資料夾展開（含子資料夾），其他副檔名略過"""
+        out, seen = [], set()
+        for raw in paths or []:
+            p = Path(str(raw))
+            cands = sorted(x for x in p.rglob('*') if x.is_file()) if p.is_dir() else [p]
+            for x in cands:
+                key = str(x).lower()
+                if x.suffix.lower() in MEDIA_EXTS and x.is_file() and key not in seen:
+                    seen.add(key)
+                    out.append(str(x))
+                if len(out) >= MAX_QUEUE:
+                    return out
+        return out
 
     def tx_pick_glossary(self):
         import webview
@@ -343,14 +441,24 @@ class Api(EditorApi):
 
     # ----- 逐字稿轉檔：執行 -----
     def tx_start(self, params: dict):
+        """params.files：一個或多個影音檔（舊版前端用 params.src）。
+        只轉其中一段（start/end）只在單一檔案時套用。"""
         if self._tx.busy:
             return {'error': '已有轉檔進行中'}
+        q = dict(params or {})
+        files = q.get('files') or ([q['src']] if q.get('src') else [])
+        if not files:
+            return {'error': '請先選一個影音檔'}
+        if len(files) > MAX_QUEUE:
+            return {'error': f'一次最多 {MAX_QUEUE} 個檔案'}
+        if len(files) > 1:
+            q['start'] = q['end'] = ''
         try:
-            p = self._collect(params or {})
+            ps = [self._collect({**q, 'src': f}) for f in files]
         except ValueError as e:
             return {'error': str(e)}
-        self._outdir = p['outdir']
-        self._tx.start(p)
+        self._outdir = ps[0]['outdir']
+        self._tx.start(ps)
         return {'ok': True}
 
     def _collect(self, q: dict) -> dict:
@@ -367,7 +475,7 @@ class Api(EditorApi):
             raise ValueError('範圍不能是負數')
         if end is not None and end <= start:
             raise ValueError('「到」必須晚於「從」')
-        words = None
+        words: list[str] = []
         gp = str(q.get('glossary') or '').strip().strip('"')
         if gp:
             try:
@@ -375,6 +483,10 @@ class Api(EditorApi):
                          if w.strip()]
             except (OSError, UnicodeDecodeError) as e:
                 raise ValueError(f'讀不到詞庫檔：{e}') from None
+        if q.get('use_glossary'):
+            # 字幕編輯器累積的「我的詞庫」也一起用，兩頁的辨識結果才一致
+            words += [w for w in self.glossary.words if w not in words]
+        words = words or None
         model = str(q.get('model') or 'small')
         if model not in MODELS:
             raise ValueError(f'不認識的模型：{model}')
@@ -390,9 +502,9 @@ class Api(EditorApi):
     def tx_poll(self):
         return self._tx.snapshot()
 
-    def tx_result(self):
-        with self._tx.lock:
-            return self._tx.result
+    def tx_result(self, i: int | None = None):
+        x = self._tx.item(i)
+        return x['result'] if x else None
 
     def tx_cancel(self):
         self._tx.request_cancel()
@@ -401,20 +513,21 @@ class Api(EditorApi):
     def tx_busy(self):
         return self._tx.busy
 
-    def tx_to_project(self):
-        """把最近一次逐字稿轉檔的結果建成字幕編輯器專案（含詞級時間戳），回傳專案名稱"""
-        job = self._tx
-        if job.state != 'done' or not getattr(job, 'full_cues', None):
+    def tx_to_project(self, i: int | None = None):
+        """把逐字稿轉檔的結果（第 i 個檔案，預設最近完成的）建成字幕編輯器專案（含詞級時間戳），
+        回傳專案名稱"""
+        x = self._tx.item(i)
+        if not x or x['state'] != 'done' or not x.get('full_cues'):
             return {'error': '還沒有可以打開的轉檔結果'}
-        base = Path(job.src).stem
+        base = Path(x['src']).stem
         existing = {p['name'] for p in self.store.list()}
         name, k = base, 2
         while name in existing:
             name, k = f'{base} ({k})', k + 1
-        self.store.create(name, job.src)
+        self.store.create(name, x['src'])
         data = self.store.load(name)
-        data['cues'] = job.full_cues
-        data['language'] = (job.result or {}).get('language')
+        data['cues'] = x['full_cues']
+        data['language'] = (x['result'] or {}).get('language')
         self.store.save(name, data)
         return {'ok': True, 'name': name}
 
