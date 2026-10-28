@@ -103,10 +103,33 @@
       b.setAttribute('aria-current', on ? 'page' : 'false');
     });
     if (v !== 'editor' && typeof video !== 'undefined' && video && !video.paused) video.pause();
+    side.editing(v === 'editor' && !$('editor').classList.contains('hidden'));
     try { localStorage.setItem('as.view', v); } catch (e) { /* file:// 可能不給存 */ }
     if (v === 'models' && tx) refreshModels();
     if (v === 'transcribe' && tx) refreshGlossCount();     // 詞庫可能在編輯器改過
   }
+
+  // ---------- 側欄收合 ----------
+  const side = (() => {
+    const pref = (() => { try { return JSON.parse(localStorage.getItem('as.side')) || {}; } catch (e) { return {}; } })();
+    let editing = false;
+    const collapsed = () => (editing ? pref.editor !== false : pref.other === true);
+    const apply = () => {
+      const on = collapsed();
+      document.querySelector('.app').classList.toggle('side-collapsed', on);
+      const b = $('sideToggle');
+      b.setAttribute('aria-expanded', !on);
+      b.setAttribute('aria-label', on ? '展開側欄' : '收合側欄');
+      b.title = (on ? '展開側欄' : '收合側欄') + '（Ctrl+\\）';
+    };
+    const toggle = () => {
+      pref[editing ? 'editor' : 'other'] = !collapsed();
+      try { localStorage.setItem('as.side', JSON.stringify(pref)); } catch (e) { /* 不能存就只在這次有效 */ }
+      apply();
+    };
+    return { apply, toggle, editing: on => { editing = !!on; apply(); } };
+  })();
+  window.__asSidebar = side;
 
   // ---------- 運算裝置顯示 ----------
   const shortDev = label => (label || '').replace(/NVIDIA\s+(GeForce\s+)?/i, '');
@@ -423,6 +446,10 @@
   }
 
   let panelCleanup = null;
+  window.addEventListener('as:modalclosed', () => {
+    document.removeEventListener('keydown', panelKey, true);
+    if (panelCleanup) { panelCleanup(); panelCleanup = null; }
+  });
   function closePanel() {
     $('modalBack').classList.add('hidden');
     document.removeEventListener('keydown', panelKey, true);
@@ -767,9 +794,9 @@
     const files = $('txFiles');
     files.innerHTML = '';
     for (const f of (res && res.files) || []) {
-      const chip = document.createElement('span');
-      chip.className = 'chip';
-      chip.title = f;
+      const chip = Object.assign(document.createElement('button'), { type: 'button', className: 'chip' });
+      chip.title = `在資料夾中顯示：${f}`;
+      chip.onclick = async () => { const r = tx.reveal_output ? await tx.reveal_output(f) : null; if (r && r.error) toast(r.error); };
       chip.append(Object.assign(document.createElement('b'), { textContent: basename(f) }));
       files.append(chip);
     }
@@ -843,9 +870,14 @@
     bindModels();
     refreshModels();
     $('aboutBtn').onclick = showAbout;
+    $('sideToggle').onclick = side.toggle;
+    document.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && e.key === '\\') { e.preventDefault(); side.toggle(); }
+    });
     if (tx !== txMock && info.settings && info.settings.onboarded === false) setTimeout(showOnboarding, 600);
     setTimeout(() => checkUpdate(false), 3000);   // 每天最多一次，可在「關於」關閉
     $('appVersion').textContent = info.version && info.version !== '0.0.0-dev' ? `v${info.version}` : (info.version ? '開發版' : '');
+    $('aboutBtn').title = `關於字幕工房 ${$('appVersion').textContent}：版本、資料夾、更新與授權`;
     st.compute = info.compute || null;
     syncRecog();
 

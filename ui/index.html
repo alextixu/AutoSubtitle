@@ -16,22 +16,25 @@
       <div class="brand-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 8h14M5 12h9M5 16h6"/></svg>
       </div>
-      <div>
+      <div class="brand-text">
         <div class="brand-name">字幕工房</div>
         <div class="brand-sub">AutoSubtitle</div>
       </div>
+      <button id="sideToggle" class="side-toggle" type="button" aria-label="收合側欄" aria-expanded="true" title="收合側欄（Ctrl+\）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+      </button>
     </div>
 
     <nav class="nav" aria-label="功能">
-      <button class="nav-item active" data-view="transcribe">
+      <button class="nav-item active" data-view="transcribe" title="逐字稿轉檔">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
         <span>逐字稿轉檔</span>
       </button>
-      <button class="nav-item" data-view="editor">
+      <button class="nav-item" data-view="editor" title="字幕編輯器">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 15h10M9 11h6"/></svg>
         <span>字幕編輯器</span>
       </button>
-      <button class="nav-item" data-view="models">
+      <button class="nav-item" data-view="models" title="模型">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>
         <span>模型</span>
         <span class="nav-badge hidden" id="navModelsBadge"></span>
@@ -46,12 +49,18 @@
           <b id="sideComputeName">偵測中…</b>
         </div>
       </div>
-      <button class="nav-item" id="navOutput">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-        <span>輸出資料夾</span>
-      </button>
       <button id="updateBanner" class="update-banner hidden" type="button"></button>
-      <p class="sidebar-note">本機離線辨識<br>影片不上傳、不用登入<br><button id="aboutBtn" class="link-btn" type="button" title="版本、資料夾、更新與授權"><span id="appVersion" class="app-version"></span> · 關於</button></p>
+      <nav class="side-actions" aria-label="捷徑">
+        <button class="nav-item side-action" id="navOutput" title="開啟逐字稿的輸出資料夾">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span>輸出資料夾</span>
+        </button>
+        <button class="nav-item side-action" id="aboutBtn" type="button" title="版本、資料夾、更新與授權">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+          <span>關於 <span id="appVersion" class="app-version"></span></span>
+        </button>
+      </nav>
+      <p class="sidebar-note">本機離線辨識<br>影片不上傳、不用登入</p>
     </div>
   </aside>
 
@@ -81,7 +90,7 @@
           </div>
           <div id="txQueue" class="queue hidden" role="list" aria-label="待轉檔案"></div>
           <div class="row" id="txRangeRow">
-            <label class="lbl">只轉其中一段</label>
+            <label class="lbl" title="長影片可以只轉其中一段">只轉一段</label>
             <div class="inline">
               <span class="muted">從</span>
               <input id="txStart" class="field xs" placeholder="0:00" spellcheck="false">
@@ -167,7 +176,8 @@
     <section id="view-editor" class="view hidden">
 
       <div id="home" class="screen">
-        <header class="home-head">
+       <div class="page wide">
+        <header class="page-head">
           <h1>字幕編輯器</h1>
           <p class="lead">聽打、斷句、對時間全自動，逐句修改、上樣式，匯出字幕檔或成品影片。</p>
         </header>
@@ -179,6 +189,7 @@
           <button id="npCreate" class="btn primary">建立專案</button>
         </div>
         <div id="projList" class="proj-list"></div>
+       </div>
       </div>
 
       <div id="editor" class="screen hidden">
@@ -192,13 +203,11 @@
             <div id="jobBar" class="job-bar hidden"><div id="jobFill"></div></div>
             <span id="jobStatus" class="job-status hidden"></span>
             <span id="jobDevice" class="dev-chip hidden"></span>
-            <button id="btnScenes" class="btn" title="偵測影片剪輯點，波形區會出現藍點可磁吸">切點偵測</button>
           </div>
           <div class="tb-group">
             <button id="btnUndo" class="btn sm icon" title="復原（Ctrl+Z）" disabled>↶</button>
             <button id="btnRedo" class="btn sm icon" title="重做（Ctrl+Shift+Z）" disabled>↷</button>
             <button id="btnIssues" class="btn sm" title="只顯示太快、太短、太長、重疊或沒有文字的句子">問題句</button>
-            <button id="btnImport" class="btn sm" title="匯入既有的 SRT／VTT 字幕檔">匯入字幕</button>
             <span id="saveStatus" class="save-status"></span>
           </div>
           <div class="tb-group search">
@@ -207,9 +216,16 @@
             <button id="btnReplace" class="btn sm">全部取代</button>
           </div>
           <div class="tb-group right">
-            <button id="btnGlossary" class="btn">詞庫</button>
-            <button id="btnStyles" class="btn">樣式牆</button>
-            <button id="btnKeys" class="btn ghost" title="快捷鍵">?</button>
+            <div class="menu-wrap">
+              <button id="btnMore" class="btn" aria-haspopup="menu" aria-expanded="false" aria-controls="moreMenu">更多 ▾</button>
+              <div id="moreMenu" class="menu hidden" role="menu" aria-label="更多工具">
+                <button id="btnImport" class="menu-item" role="menuitem" type="button">匯入字幕<small>SRT／VTT</small></button>
+                <button id="btnScenes" class="menu-item" role="menuitem" type="button">切點偵測<small>波形上標出剪輯點，可磁吸</small></button>
+                <button id="btnGlossary" class="menu-item" role="menuitem" type="button">詞庫<small>辨識時優先採用的詞</small></button>
+                <button id="btnStyles" class="menu-item" role="menuitem" type="button">樣式牆<small>收藏的字幕樣式</small></button>
+                <button id="btnKeys" class="menu-item" role="menuitem" type="button">快捷鍵<small>?</small></button>
+              </div>
+            </div>
             <button id="btnExport" class="btn primary">匯出</button>
           </div>
         </div>
@@ -260,8 +276,9 @@
               </select>
             </div>
 
-            <!-- 字幕樣式面板 -->
-            <div class="style-panel">
+            <!-- 字幕樣式面板（可折疊） -->
+            <details class="style-panel" id="stylePanel" open>
+              <summary>字幕樣式</summary>
               <div class="sp-row">
                 <label>字型</label>
                 <select id="stFont" class="field sm">
@@ -288,8 +305,11 @@
                 <button id="btnSaveStyle" class="btn sm">收藏目前樣式</button>
                 <span class="sp-hint">拖曳影片上的字幕可調位置，靠近安全框會吸附</span>
               </div>
-            </div>
+            </details>
           </div>
+          <div id="splitter" class="splitter" role="separator" tabindex="0" aria-orientation="vertical"
+               aria-label="調整影片與字幕列表的寬度" aria-valuemin="28" aria-valuemax="70" aria-valuenow="46"
+               title="拖曳調整寬度，雙擊還原"></div>
 
           <!-- 編輯區：字幕列表 -->
           <div class="cue-pane">
@@ -300,7 +320,7 @@
               <button id="multiDelete" class="btn sm ghost danger">刪除</button>
               <button id="multiClear" class="btn sm ghost">取消選取</button>
             </div>
-            <div id="cueList" class="cue-list"></div>
+            <div id="cueList" class="cue-list" role="listbox" aria-label="字幕列表" aria-multiselectable="true" tabindex="0"></div>
           </div>
         </div>
       </div>

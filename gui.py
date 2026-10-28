@@ -387,6 +387,26 @@ class Api(EditorApi):
         except OSError as e:
             return {'error': f'打不開資料夾：{e}'}
 
+    def reveal_output(self, path: str):
+        """在檔案總管／Finder 中選取一個輸出檔。只接受這次轉檔產生的檔案"""
+        with self._tx.lock:
+            allowed = {f for x in self._tx.queue for f in ((x.get('result') or {}).get('files') or [])}
+        if path not in allowed:
+            return {'error': '只能顯示這次轉檔產生的檔案'}
+        p = Path(path)
+        if not p.exists():
+            return {'error': '檔案已經不在了，可能被移動或刪除'}
+        try:
+            if sys.platform == 'win32':
+                subprocess.Popen(['explorer', '/select,', str(p)])  # noqa: S603,S607
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', '-R', str(p)])  # noqa: S603,S607
+            else:
+                open_folder(p.parent)
+            return {'ok': True}
+        except OSError as e:
+            return {'error': f'打不開資料夾：{e}'}
+
     def copy_text(self, text: str):
         return {'ok': set_clipboard(text or '')}
 
@@ -695,6 +715,40 @@ def selftest(media: str, out: str, model: str = 'tiny') -> int:
     return 0 if report['ok'] else 1
 
 
+MIN_SIZE = (980, 660)
+
+# 找出超出視窗右緣的元件（看得見的才算）。回傳 ['id 或 class:右緣 px', ...]
+_OVERFLOW_JS = """(() => {
+  const W = window.innerWidth;           // 元件座標以視窗為準（縮放時 html 的 clientWidth 會跟著縮）
+  return [...document.querySelectorAll('body *')].filter(e => {
+    if (e.offsetParent === null) return false;
+    const r = e.getBoundingClientRect();
+    if (r.width === 0) return false;
+    const card = e.parentElement && e.parentElement.closest('.card');   // 也不能撐出所在的卡片
+    return r.right > W + 1 || (card && r.right > card.getBoundingClientRect().right + 1);
+  }).slice(0, 5).map(e => (e.id || e.className || e.tagName) + ':' + Math.round(e.getBoundingClientRect().right));
+})()"""
+
+
+def _layout_check(win) -> dict:
+    """最小視窗尺寸下，100% 與 125% 縮放各頁都不能有東西超出視窗（UX-10）。
+    回傳 {'100%/transcribe': [...超出的元件], ...}，全部空的才算通過。"""
+    import json
+    res = {}
+    win.resize(*MIN_SIZE)
+    time.sleep(1.0)
+    for zoom in ('1', '1.25'):
+        win.evaluate_js(f"document.documentElement.style.zoom = '{zoom}'")
+        for view in ('transcribe', 'models', 'editor'):
+            win.evaluate_js(f"document.querySelector('.nav-item[data-view={view}]').click()")
+            time.sleep(0.6)
+            raw = win.evaluate_js(_OVERFLOW_JS)
+            bad = json.loads(raw) if isinstance(raw, str) else (raw or [])
+            res[f'{round(float(zoom) * 100)}%/{view}'] = bad
+    win.evaluate_js("document.documentElement.style.zoom = ''")
+    return res
+
+
 def uitest(out: str, timeout: float = 90.0) -> int:
     """開真正的視窗，確認介面載入、前後端 API 接上，然後自動關閉。給打包後的 CI 驗證用。
     環境變數 AS_UITEST_SHOT 給一個 .png 路徑時，macOS 會順便截一張螢幕。"""
@@ -724,6 +778,9 @@ def uitest(out: str, timeout: float = 90.0) -> int:
                 except Exception as e:  # noqa: BLE001
                     report['last_error'] = repr(e)
                 time.sleep(0.5)
+            if report['ok']:
+                report['layout'] = _layout_check(win)
+                report['ok'] = not any(report['layout'].values())
             shot = os.environ.get('AS_UITEST_SHOT')
             if shot and sys.platform == 'darwin':
                 time.sleep(1.5)
@@ -811,7 +868,7 @@ def main(default_view: str = 'transcribe'):
     api = Api(initial_view=view)
     win = webview.create_window(
         APP_TITLE, str(ui_file()), js_api=api,
-        width=1280, height=840, min_size=(980, 660), text_select=True,
+        width=1280, height=840, min_size=MIN_SIZE, text_select=True,
         background_color=_startup_bg())
     api._window = win
 

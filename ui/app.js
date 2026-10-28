@@ -249,6 +249,7 @@ async function showHome() {
   save.flush();
   $('editor').classList.add('hidden');
   $('home').classList.remove('hidden');
+  if (window.__asSidebar) window.__asSidebar.editing(false);
   const list = await api.list_projects();
   const box = $('projList');
   box.innerHTML = '';
@@ -266,17 +267,19 @@ async function showHome() {
     const name = Object.assign(document.createElement('b'), { textContent: p.name });
     const meta1 = Object.assign(document.createElement('span'), { className: 'meta', textContent: `${p.cue_count} 條字幕 · ${fmtDate(p.updated)}` });
     const meta2 = Object.assign(document.createElement('span'), { className: 'meta media', textContent: basename(p.media), title: p.media });
-    const del = Object.assign(document.createElement('span'), { className: 'del', textContent: '刪除', role: 'button', tabIndex: 0 });
-    card.append(name, meta1, meta2, del);
-    card.onclick = e => { if (e.target === del) return; openProject(p.name); };
+    const del = Object.assign(document.createElement('button'), { type: 'button', className: 'del', textContent: '刪除' });
+    del.setAttribute('aria-label', `刪除專案「${p.name}」`);
+    card.append(name, meta1, meta2);
+    card.onclick = () => openProject(p.name);
+    const item = Object.assign(document.createElement('div'), { className: 'proj-item' });
+    item.append(card, del);
     const askDelete = async e => {
       e.stopPropagation();
       const ok = await confirmBox({ title: `刪除專案「${p.name}」？`, text: `${p.cue_count} 條字幕會一起刪除，影片檔不受影響。這個動作無法復原。`, ok: '刪除', danger: true });
       if (ok) { await api.delete_project(p.name); showHome(); toast(`已刪除專案「${p.name}」`); }
     };
     del.onclick = askDelete;
-    del.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') askDelete(e); };
-    box.append(card);
+    box.append(item);
   }
 }
 
@@ -312,6 +315,7 @@ async function openProject(name) {
   const d = await api.open_project(name);
   if (d.error) { toast(d.error); return; }
   state.name = name;
+  if (window.__asSidebar) window.__asSidebar.editing(true);   // 編輯畫面需要寬度：側欄自動收成圖示列
   state.cues = normalizeCues(d.cues || []);
   state.scenes = d.scenes || [];
   state.marks = [];
@@ -449,6 +453,9 @@ function buildRow(i) {
   row.className = 'cue-row' + (i === state.activeCue ? ' active' : '') + (i === state.selected || state.multi.has(c.id) ? ' selected' : '') + (info.issues.length ? ' warn' : '');
   row.dataset.i = i;
   row.tabIndex = -1;
+  row.id = 'cue-' + c.id;
+  row.setAttribute('role', 'option');
+  row.setAttribute('aria-selected', i === state.selected || state.multi.has(c.id));
   const time = document.createElement('div');
   time.className = 'cue-time';
   time.title = '點擊修改時間';
@@ -466,7 +473,10 @@ function buildRow(i) {
   } else text.textContent = c.text;
   const tools = document.createElement('div');
   tools.className = 'cue-tools';
-  const tool = (a, label, title) => { const s = Object.assign(document.createElement('span'), { textContent: label, title, role: 'button', tabIndex: 0 }); s.dataset.a = a; return s; };
+  const tool = (a, label, title) => {
+    const b = Object.assign(document.createElement('button'), { type: 'button', className: 'ct', textContent: label, title, tabIndex: -1 });
+    b.setAttribute('aria-label', title); b.dataset.a = a; return b;
+  };
   if (info.issues.length) tools.append(Object.assign(document.createElement('span'), { className: 'warn-dot', textContent: '⚠', title: info.issues.join('\n') }));
   tools.append(tool('edit', '編輯', '編輯文字（Enter）'), tool('ins', '＋', '在此之後插入一句'), tool('merge', '⇧併', '與上一句合併'), tool('del', '✕', '刪除（Delete）'));
   row.append(time, text, tools);
@@ -510,6 +520,8 @@ function selectCue(i, scroll = false, keepMulti = false) {
   markWaveDirty();
   const row = rows.get(i);
   if (row) { row.classList.add('selected'); if (scroll) row.scrollIntoView({ block: 'nearest' }); }
+  rows.forEach((r, k) => r.setAttribute('aria-selected', k === i || state.multi.has(state.cues[k] && state.cues[k].id)));
+  if (row) $('cueList').setAttribute('aria-activedescendant', row.id); else $('cueList').removeAttribute('aria-activedescendant');
 }
 
 // ----- 文字編輯 -----
@@ -1290,6 +1302,48 @@ function openModal(html) {
 function closeModal() { $('modalBack').classList.add('hidden'); }
 $('modalBack').onclick = e => { if (e.target.id === 'modalBack') closeModal(); };
 
+// 彈窗共用的可及性：開啟時記住原本的焦點並移進彈窗、Tab 只在彈窗內循環、關閉後焦點回到原處。
+// 各彈窗自己的 Esc／Enter 處理（confirm、關於、辨識設定）在 capture 階段先攔，這裡只做後備。
+(function modalA11y() {
+  const back = $('modalBack'), modal = $('modal');
+  let opener = null, lastOutside = null;
+  // 各彈窗開啟後會自己把焦點移進去，所以要一直記著「彈窗外最後被聚焦的元件」
+  document.addEventListener('focusin', e => { if (!modal.contains(e.target)) lastOutside = e.target; });
+  document.addEventListener('click', e => {      // 視窗沒有焦點時不會有 focusin，用點擊補記
+    const el = e.target.closest && e.target.closest('button, a, input, select, [tabindex]');
+    if (el && !modal.contains(el)) lastOutside = el;
+  }, true);
+  const restoreTarget = el => {
+    const menu = el && el.closest && el.closest('.menu');     // 從「更多」選單開的：選單已收起，回到選單按鈕
+    if (menu) return document.querySelector(`[aria-controls="${menu.id}"]`);
+    return el;
+  };
+  const focusables = () => [...modal.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])')]
+    .filter(el => el.offsetParent !== null);
+  new MutationObserver(() => {
+    const open = !back.classList.contains('hidden');
+    if (open && !opener) {
+      opener = restoreTarget(lastOutside) || document.body;
+      modal.setAttribute('role', 'dialog'); modal.setAttribute('aria-modal', 'true');
+      requestAnimationFrame(() => { if (!modal.contains(document.activeElement)) { const f = focusables()[0]; if (f) f.focus(); } });
+    } else if (!open && opener) {
+      const o = opener; opener = null;
+      window.dispatchEvent(new Event('as:modalclosed'));
+      if (o && document.contains(o) && typeof o.focus === 'function') o.focus();
+    }
+  }).observe(back, { attributes: true, attributeFilter: ['class'] });
+  document.addEventListener('keydown', e => {
+    if (back.classList.contains('hidden')) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeModal(); return; }
+    if (e.key !== 'Tab') return;
+    const f = focusables();
+    if (!f.length) return;
+    const i = f.indexOf(document.activeElement);
+    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && (i === f.length - 1 || i < 0)) { e.preventDefault(); f[0].focus(); }
+  });
+})();
+
 async function showGlossary() {
   openModal(`<h2>詞庫（越用越準）</h2>
     <p class="exp-note">辨識時會優先採用這些寫法。修正字幕時也會自動提示加入。</p>
@@ -1404,6 +1458,76 @@ function showKeys() {
 }
 
 // ========== 快捷鍵 ==========
+// ----- 版面：工具列「更多」選單、影片／列表分隔線、可折疊的樣式面板 -----
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('as.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('as.' + k, JSON.stringify(v)); } catch (e) { /* file:// 或私密模式 */ } },
+};
+
+function setupMoreMenu() {
+  const btn = $('btnMore'), menu = $('moreMenu');
+  const items = () => [...menu.querySelectorAll('.menu-item:not([disabled])')];
+  const open = on => {
+    menu.classList.toggle('hidden', !on);
+    btn.setAttribute('aria-expanded', on);
+    if (on) { const f = items()[0]; if (f) f.focus(); }
+  };
+  btn.onclick = e => { e.stopPropagation(); open(menu.classList.contains('hidden')); };
+  menu.addEventListener('click', e => { if (e.target.closest('.menu-item')) open(false); });
+  document.addEventListener('click', e => { if (!menu.classList.contains('hidden') && !menu.contains(e.target) && e.target !== btn) open(false); });
+  menu.addEventListener('keydown', e => {
+    const list = items(), k = list.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); e.stopPropagation();
+      list[(k + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length].focus();
+    } else if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault(); e.stopPropagation(); list[e.key === 'Home' ? 0 : list.length - 1].focus();
+    } else if (e.key === 'Escape' || e.key === 'Tab') {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); btn.focus(); }
+      open(false);
+    }
+  });
+}
+
+function setupSplitter() {
+  const sp = $('splitter'), pane = document.querySelector('.video-pane'), box = document.querySelector('.main-split');
+  const DEF = 46;
+  const apply = pct => {
+    pct = Math.min(70, Math.max(28, pct));
+    pane.style.flexBasis = pct.toFixed(1) + '%';
+    sp.setAttribute('aria-valuenow', Math.round(pct));
+    return pct;
+  };
+  let pct = apply(store.get('split', DEF));
+  const done = () => { store.set('split', +pct.toFixed(1)); markWaveDirty(); };
+  sp.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    sp.setPointerCapture(e.pointerId);
+    sp.classList.add('drag');
+    const r = box.getBoundingClientRect();
+    const move = ev => { pct = apply((ev.clientX - r.left) / r.width * 100); };
+    const up = () => { sp.classList.remove('drag'); sp.removeEventListener('pointermove', move); sp.removeEventListener('pointerup', up); done(); };
+    sp.addEventListener('pointermove', move);
+    sp.addEventListener('pointerup', up);
+  });
+  sp.addEventListener('keydown', e => {
+    const step = e.shiftKey ? 8 : 2;
+    if (e.key === 'ArrowLeft') pct = apply(pct - step);
+    else if (e.key === 'ArrowRight') pct = apply(pct + step);
+    else if (e.key === 'Home') pct = apply(28);
+    else if (e.key === 'End') pct = apply(70);
+    else return;
+    e.preventDefault(); e.stopPropagation(); done();
+  });
+  sp.ondblclick = () => { pct = apply(DEF); done(); };
+}
+
+function setupStylePanel() {
+  const d = $('stylePanel');
+  d.open = store.get('stylePanel', true);
+  d.addEventListener('toggle', () => store.set('stylePanel', d.open));
+}
+
 function setupHotkeys() {
   document.addEventListener('keydown', e => {
     // 不在編輯畫面時不攔快捷鍵：切到逐字稿轉檔頁後 state.name 仍在，要再看畫面是否可見
@@ -1513,6 +1637,9 @@ function setupHotkeys() {
   setupWave();
   setupPlayback();
   setupHotkeys();
+  setupMoreMenu();
+  setupSplitter();
+  setupStylePanel();
   updateWaveHint();
   updateUndoButtons();
 
